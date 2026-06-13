@@ -47,7 +47,7 @@ def tline_tube_along_x(S0,
 
     # Излучение сейчас нулевое, как в исходном коде
     Zrad = np.zeros(n_freq, dtype=complex)
-
+                  
     T_out = np.zeros(n_freq, dtype=complex)
     T_x = np.zeros((n_freq, n_seg), dtype=complex)
 
