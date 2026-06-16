@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import random
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
@@ -42,6 +43,10 @@ class TrainConfig:
     restore_best: bool = True
     live_plot_every_steps: int | None = None
     live_plot_show_epoch: bool = True
+    checkpoint_dir: str | Path = "checkpoints"
+    checkpoint_name: str | None = None
+    save_best: bool = True
+    save_every_steps: int | None = None
 
 
 @dataclass
@@ -56,6 +61,8 @@ class TrainHistory:
     planned_val_steps: int | None = None
     planned_epochs: int | None = None
     planned_validations: int | None = None
+    best_checkpoint_path: str | None = None
+    intermediate_checkpoint_paths: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -98,6 +105,73 @@ def load_model_state(
     strict: bool = True,
 ) -> torch.nn.modules.module._IncompatibleKeys:
     return model.load_state_dict(clean_state_dict(state_dict), strict=strict)
+
+
+def _safe_checkpoint_stem(name: str) -> str:
+    cleaned = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in name.strip())
+    return cleaned or "model"
+
+
+def _checkpoint_stem(model: nn.Module, config: TrainConfig) -> str:
+    name = config.checkpoint_name or getattr(model, "model_name", None) or model.__class__.__name__
+    return _safe_checkpoint_stem(str(name))
+
+
+def _checkpoint_payload(
+    *,
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    history: TrainHistory,
+    epoch: int,
+    global_step: int,
+    best_loss: float,
+    kind: str,
+) -> dict[str, Any]:
+    return {
+        "kind": kind,
+        "epoch": epoch,
+        "global_step": global_step,
+        "best_loss": best_loss,
+        "model_class": model.__class__.__name__,
+        "model_name": getattr(model, "model_name", model.__class__.__name__),
+        "model_state": clean_state_dict(model.state_dict()),
+        "optimizer_state": optimizer.state_dict(),
+        "history": history.as_dict(),
+    }
+
+
+def save_training_checkpoint(
+    *,
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    history: TrainHistory,
+    config: TrainConfig,
+    epoch: int,
+    global_step: int,
+    best_loss: float,
+    kind: str,
+) -> Path:
+    checkpoint_dir = Path(config.checkpoint_dir)
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    stem = _checkpoint_stem(model, config)
+    if kind == "best":
+        path = checkpoint_dir / f"{stem}_best.pt"
+    else:
+        path = checkpoint_dir / f"{stem}_{kind}_step_{global_step:08d}.pt"
+
+    torch.save(
+        _checkpoint_payload(
+            model=model,
+            optimizer=optimizer,
+            history=history,
+            epoch=epoch,
+            global_step=global_step,
+            best_loss=best_loss,
+            kind=kind,
+        ),
+        path,
+    )
+    return path
 
 
 def make_optimizer(
@@ -480,10 +554,28 @@ def fit(
     best_state: dict[str, torch.Tensor] | None = None
     epochs_without_improvement = 0
     global_step = 0
+    current_epoch = 0
 
     def on_train_step_end(_local_step: int, _loss_value: float) -> None:
         nonlocal global_step
         global_step += 1
+        if (
+            config.save_every_steps is not None
+            and config.save_every_steps > 0
+            and global_step % config.save_every_steps == 0
+        ):
+            path = save_training_checkpoint(
+                model=model,
+                optimizer=optimizer,
+                history=history,
+                config=config,
+                epoch=current_epoch,
+                global_step=global_step,
+                best_loss=best_loss,
+                kind="intermediate",
+            )
+            history.intermediate_checkpoint_paths.append(str(path))
+
         if (
             config.live_plot_every_steps is not None
             and config.live_plot_every_steps > 0
@@ -502,6 +594,7 @@ def fit(
             )
 
     for epoch in range(1, config.epochs + 1):
+        current_epoch = epoch
         train_loss = train_one_epoch(
             model,
             optimizer,
@@ -572,6 +665,19 @@ def fit(
 
     if config.restore_best and best_state is not None:
         load_model_state(model, best_state)
+
+    if config.save_best:
+        path = save_training_checkpoint(
+            model=model,
+            optimizer=optimizer,
+            history=history,
+            config=config,
+            epoch=current_epoch,
+            global_step=global_step,
+            best_loss=best_loss,
+            kind="best",
+        )
+        history.best_checkpoint_path = str(path)
 
     return history
 

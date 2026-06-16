@@ -70,6 +70,7 @@ class TransferFunctionFNO(nn.Module):
             raise ValueError("out_channels must be >= 1")
 
         self.out_channels = out_channels
+        self.model_name = "transfer_function_fno"
 
         self.encoder = FNO(
             n_modes=(n_modes,),
