@@ -68,6 +68,14 @@ class LinearGeometry:
 
 
 @dataclass(frozen=True)
+class ConicalGeometry:
+    length_m: float
+    area_in_m2: float
+    area_out_m2: float
+    sample_count: int = 257
+
+
+@dataclass(frozen=True)
 class UniformAreasGeometry:
     length_m: float
     area_samples_m2: Sequence[float]
@@ -79,7 +87,7 @@ class ExplicitGeometry:
     area_m2: Sequence[float]
 
 
-GeometrySpec = ThreePointGeometry | LinearGeometry | UniformAreasGeometry | ExplicitGeometry | Path | str
+GeometrySpec = ThreePointGeometry | LinearGeometry | ConicalGeometry | UniformAreasGeometry | ExplicitGeometry | Path | str
 
 GeometryKind = Literal[
     "cylinder",
@@ -128,12 +136,24 @@ def make_cylinder_geometry(length_m: float, area_m2: float) -> LinearGeometry:
     return LinearGeometry(length_m=length_m, area_left_m2=area_m2, area_right_m2=area_m2)
 
 
-def make_conical_geometry(length_m: float, area_in_m2: float, area_out_m2: float) -> LinearGeometry:
+def make_conical_geometry(
+    length_m: float,
+    area_in_m2: float,
+    area_out_m2: float,
+    sample_count: int = 257,
+) -> ConicalGeometry:
     if length_m <= 0.0:
         raise ValueError("length_m must be positive")
     if area_in_m2 <= 0.0 or area_out_m2 <= 0.0:
         raise ValueError("areas must be positive")
-    return LinearGeometry(length_m=length_m, area_left_m2=area_in_m2, area_right_m2=area_out_m2)
+    if sample_count < 2:
+        raise ValueError("sample_count must be >= 2")
+    return ConicalGeometry(
+        length_m=length_m,
+        area_in_m2=area_in_m2,
+        area_out_m2=area_out_m2,
+        sample_count=sample_count,
+    )
 
 
 def make_three_point_geometry(
@@ -152,6 +172,58 @@ def make_three_point_geometry(
         area_middle_m2=area_middle_m2,
         area_right_m2=area_right_m2,
     )
+
+
+def _sample_conical_arrays(
+    length_m: float,
+    area_in_m2: float,
+    area_out_m2: float,
+    sample_count: int,
+) -> tuple[list[float], list[float]]:
+    if sample_count < 2:
+        raise ValueError("sample_count must be >= 2")
+
+    radius_in_m = math.sqrt(area_in_m2 / math.pi)
+    radius_out_m = math.sqrt(area_out_m2 / math.pi)
+
+    x_nodes: list[float] = []
+    area_nodes: list[float] = []
+    for i in range(sample_count):
+        t = i / float(sample_count - 1)
+        x_nodes.append(length_m * t)
+        radius_m = radius_in_m * (1.0 - t) + radius_out_m * t
+        area_nodes.append(math.pi * radius_m * radius_m)
+
+    return x_nodes, area_nodes
+
+
+def _sample_two_cone_arrays(
+    length_m: float,
+    area_left_m2: float,
+    area_middle_m2: float,
+    area_right_m2: float,
+    sample_count_per_segment: int = 129,
+) -> tuple[list[float], list[float]]:
+    if sample_count_per_segment < 2:
+        raise ValueError("sample_count_per_segment must be >= 2")
+
+    half_length_m = 0.5 * length_m
+    left_x, left_area = _sample_conical_arrays(
+        half_length_m,
+        area_left_m2,
+        area_middle_m2,
+        sample_count_per_segment,
+    )
+    right_x, right_area = _sample_conical_arrays(
+        half_length_m,
+        area_middle_m2,
+        area_right_m2,
+        sample_count_per_segment,
+    )
+
+    x_nodes = left_x + [half_length_m + x for x in right_x[1:]]
+    area_nodes = left_area + right_area[1:]
+    return x_nodes, area_nodes
 
 
 def make_tube_with_hole_geometry(
@@ -428,11 +500,14 @@ def make_geometry_from_ranges(
         )
 
     if kind in ("conical", "cone"):
-        return make_conical_geometry(
-            length_m=float(params["length_m"]),
-            area_in_m2=float(params["area_in_m2"]),
-            area_out_m2=float(params["area_out_m2"]),
-        )
+        kwargs = {
+            "length_m": float(params["length_m"]),
+            "area_in_m2": float(params["area_in_m2"]),
+            "area_out_m2": float(params["area_out_m2"]),
+        }
+        if "sample_count" in params:
+            kwargs["sample_count"] = int(params["sample_count"])
+        return make_conical_geometry(**kwargs)
 
     if kind == "three_point":
         return make_three_point_geometry(
@@ -546,9 +621,19 @@ def make_all_test_geometries(seed: int = 1) -> dict[str, GeometrySpec]:
 
 def geometry_to_arrays(geometry: GeometrySpec) -> tuple[list[float], list[float]]:
     if isinstance(geometry, ThreePointGeometry):
-        return (
-            [0.0, 0.5 * geometry.length_m, geometry.length_m],
-            [geometry.area_left_m2, geometry.area_middle_m2, geometry.area_right_m2],
+        return _sample_two_cone_arrays(
+            geometry.length_m,
+            geometry.area_left_m2,
+            geometry.area_middle_m2,
+            geometry.area_right_m2,
+        )
+
+    if isinstance(geometry, ConicalGeometry):
+        return _sample_conical_arrays(
+            geometry.length_m,
+            geometry.area_in_m2,
+            geometry.area_out_m2,
+            geometry.sample_count,
         )
 
     if isinstance(geometry, LinearGeometry):
@@ -890,10 +975,23 @@ def build_binary(binary_path: Path = BINARY_PATH, rebuild: bool = False) -> Path
 
 def _geometry_args(geometry: GeometrySpec) -> list[str]:
     if isinstance(geometry, ThreePointGeometry):
+        x_m, area_m2 = geometry_to_arrays(geometry)
+        xs = ",".join(str(v) for v in x_m)
+        areas = ",".join(str(v) for v in area_m2)
         return [
-            "--geometry", "three-point",
-            "--length-m", str(geometry.length_m),
-            "--areas-m2", f"{geometry.area_left_m2},{geometry.area_middle_m2},{geometry.area_right_m2}",
+            "--geometry", "explicit",
+            "--x-m", xs,
+            "--areas-m2", areas,
+        ]
+
+    if isinstance(geometry, ConicalGeometry):
+        x_m, area_m2 = geometry_to_arrays(geometry)
+        xs = ",".join(str(v) for v in x_m)
+        areas = ",".join(str(v) for v in area_m2)
+        return [
+            "--geometry", "explicit",
+            "--x-m", xs,
+            "--areas-m2", areas,
         ]
 
     if isinstance(geometry, LinearGeometry):
