@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 
 
 ROOT = Path(__file__).resolve().parent
+CPP_DIR = ROOT / "cpp"
 BIN_DIR = ROOT / "bin"
 BINARY_PATH = BIN_DIR / "vt_all_solvers_cli.exe"
 
@@ -864,18 +865,20 @@ def build_binary(binary_path: Path = BINARY_PATH, rebuild: bool = False) -> Path
     binary_path.parent.mkdir(parents=True, exist_ok=True)
     compiler = _require_gpp()
     sources = [
-        ROOT / "vt_all_solvers_cli.cpp",
-        ROOT / "vt_geometry_simple.cpp",
-        ROOT / "vt_cylinder_tlm_solver.cpp",
-        ROOT / "vt_cone_reference_solver.cpp",
-        ROOT / "vt_arma_solver.cpp",
-        ROOT / "vt_webster_fdtd_solver.cpp",
+        CPP_DIR / "vt_all_solvers_cli.cpp",
+        CPP_DIR / "vt_geometry_simple.cpp",
+        CPP_DIR / "vt_cylinder_tlm_solver.cpp",
+        CPP_DIR / "vt_cone_reference_solver.cpp",
+        CPP_DIR / "vt_arma_solver.cpp",
+        CPP_DIR / "vt_webster_fdtd_solver.cpp",
     ]
 
     command = [
         compiler,
         "-std=c++17",
         "-O2",
+        "-I",
+        str(ROOT),
         *map(str, sources),
         "-o",
         str(binary_path),

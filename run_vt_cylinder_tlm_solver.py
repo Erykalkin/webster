@@ -10,8 +10,9 @@ import matplotlib.pyplot as plt
 
 
 ROOT = Path(__file__).resolve().parent
+CPP_DIR = ROOT / "cpp"
 BIN_DIR = ROOT / "bin"
-GENERATED_MAIN = ROOT / "_generated_vt_cylinder_tlm_main.cpp"
+GENERATED_MAIN = CPP_DIR / "_generated_vt_cylinder_tlm_main.cpp"
 
 
 def generate_main_cpp(
@@ -66,6 +67,7 @@ int main() {{
     return 0;
 }}
 """
+    GENERATED_MAIN.parent.mkdir(parents=True, exist_ok=True)
     GENERATED_MAIN.write_text(source, encoding="utf-8")
     return GENERATED_MAIN
 
@@ -87,14 +89,16 @@ def build_command(
 
     sources = [
         main_cpp,
-        ROOT / "vt_cylinder_tlm_solver.cpp",
-        ROOT / "vt_geometry_simple.cpp",
+        CPP_DIR / "vt_cylinder_tlm_solver.cpp",
+        CPP_DIR / "vt_geometry_simple.cpp",
     ]
 
     return [
         compiler,
         "-std=c++17",
         "-O2",
+        "-I",
+        str(ROOT),
         *map(str, sources),
         "-o",
         str(output_path),
