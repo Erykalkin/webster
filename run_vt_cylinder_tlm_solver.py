@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import platform
 import shutil
 import subprocess
 import sys
@@ -13,6 +14,24 @@ ROOT = Path(__file__).resolve().parent
 CPP_DIR = ROOT / "cpp"
 BIN_DIR = ROOT / "bin"
 GENERATED_MAIN = CPP_DIR / "_generated_vt_cylinder_tlm_main.cpp"
+
+
+def _platform_bin_dir() -> Path:
+    system = platform.system().lower()
+    if system.startswith("windows"):
+        return BIN_DIR / "windows"
+    if system == "darwin":
+        return BIN_DIR / "macos"
+    return BIN_DIR / "linux"
+
+
+def _platform_executable_name(stem: str) -> str:
+    if platform.system().lower().startswith("windows"):
+        return f"{stem}.exe"
+    return stem
+
+
+DEFAULT_OUTPUT_NAME = _platform_executable_name("vt_cylinder_tlm_solver_demo")
 
 
 def generate_main_cpp(
@@ -172,7 +191,7 @@ def solve(
     f_min_hz: float = 50.0,
     f_max_hz: float = 5000.0,
     plot: bool = False,
-    output_name: str = "vt_cylinder_tlm_solver_demo.exe",
+    output_name: str = DEFAULT_OUTPUT_NAME,
 ) -> tuple[list[float], list[float]]:
     if points < 2:
         raise ValueError("points must be >= 2.")
@@ -181,7 +200,7 @@ def solve(
     if f_max_hz <= f_min_hz:
         raise ValueError("f_max_hz must be greater than f_min_hz.")
 
-    output_path = BIN_DIR / output_name
+    output_path = _platform_bin_dir() / output_name
     compile_binary(output_path, points, sections, f_min_hz, f_max_hz)
     stdout = run_binary_capture(output_path)
     frequencies_hz, transfer_abs = parse_solver_output(stdout)
@@ -200,7 +219,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--output",
-        default="vt_cylinder_tlm_solver_demo.exe",
+        default=DEFAULT_OUTPUT_NAME,
         help="Имя выходного exe-файла.",
     )
     parser.add_argument(
@@ -239,7 +258,9 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    output_path = ROOT / args.output
+    output_path = Path(args.output)
+    if not output_path.is_absolute():
+        output_path = _platform_bin_dir() / output_path
 
     if args.points < 2:
         print("Число точек --points должно быть >= 2.", file=sys.stderr)

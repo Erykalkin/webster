@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import cmath
 import csv
+import errno
 import math
+import platform
 import random as py_random
 import shutil
 import subprocess
@@ -19,7 +21,24 @@ import matplotlib.pyplot as plt
 ROOT = Path(__file__).resolve().parent
 CPP_DIR = ROOT / "cpp"
 BIN_DIR = ROOT / "bin"
-BINARY_PATH = BIN_DIR / "vt_all_solvers_cli.exe"
+
+
+def _platform_bin_dir() -> Path:
+    system = platform.system().lower()
+    if system.startswith("windows"):
+        return BIN_DIR / "windows"
+    if system == "darwin":
+        return BIN_DIR / "macos"
+    return BIN_DIR / "linux"
+
+
+def _platform_executable_name(stem: str) -> str:
+    if platform.system().lower().startswith("windows"):
+        return f"{stem}.exe"
+    return stem
+
+
+BINARY_PATH = _platform_bin_dir() / _platform_executable_name("vt_all_solvers_cli")
 
 SolverKind = Literal["cylinder", "cone", "arma", "webster"]
 GridKind = Literal["linear", "log"]
@@ -1264,13 +1283,27 @@ def _run_solver(
     if config.signal_f1_hz is not None:
         command.extend(["--signal-f1-hz", str(config.signal_f1_hz)])
 
-    completed = subprocess.run(
-        command,
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as exc:
+        if not rebuild and exc.errno in (errno.EACCES, errno.ENOEXEC):
+            binary = build_binary(binary_path=binary_path, rebuild=True)
+            command[0] = str(binary)
+            completed = subprocess.run(
+                command,
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        else:
+            raise
     return completed.stdout
 
 
