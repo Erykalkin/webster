@@ -1,0 +1,76 @@
+\documentclass[a4paper,12pt]{report}
+
+% Кодировка и локализация
+\usepackage{cmap} % Поддержка поиска и копирования русского текста в PDF
+\usepackage[T2A]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[english,russian]{babel}
+
+% Поля страниц по ГОСТ 7.32 (левое 30 мм, правое 15 мм, верхнее 20 мм, нижнее 20 мм)
+\usepackage[left=3.0cm, right=1.5cm, top=2.0cm, bottom=2.0cm]{geometry}
+
+% Полуторный интервал
+\usepackage{setspace}
+\onehalfspacing
+
+% Абзацный отступ по ГОСТ (1.25 см)
+\parindent=1.25cm
+\parskip=0pt
+\emergencystretch 3em % Предотвращение выхода текста за границы полей (overfull \hbox)
+
+% Пакеты для математики
+\usepackage{amsmath,amsfonts,amssymb,amsthm,mathtools}
+\usepackage{icomma} % Умная запятая для десятичных дробей
+
+% Пакеты для таблиц и графики
+\usepackage{multirow}
+\usepackage{graphicx}
+\usepackage{float}
+
+% Номера страниц вверху по центру или внизу по центру (по ГОСТ обычно внизу по центру или вверху по центру)
+\pagestyle{plain}
+
+% Пакет для определения последней страницы
+\usepackage{lastpage}
+
+% Вспомогательная команда для рисования плейсхолдеров рисунков
+\newcommand{\rect}{%
+    \begin{center}
+        \fbox{\parbox[c][5cm][c]{10cm}{\centering\textit{Иллюстрация (график)}} }
+    \end{center}
+}
+
+% Настройка гиперссылок
+\usepackage[unicode,colorlinks=true,allcolors=blue,pdftex]{hyperref}
+
+\begin{document}
+
+% 1. Титульный лист
+\include{titlepage}
+
+% 2. Аннотация / Реферат
+\include{abstract}
+
+% 3. Оглавление
+\tableofcontents
+\newpage
+
+% 4. Введение
+\include{introduction}
+
+% 5. Основная часть (Главы)
+\include{chapter1_theory}
+\include{chapter2_numerical}
+\include{chapter3_results}
+
+% 6. Заключение
+\include{conclusion}
+
+% 7. Список литературы
+\newpage
+\addcontentsline{toc}{chapter}{Список литературы}
+\bibliographystyle{unsrt}
+\bibliography{bibliography}
+\label{ref_count} % Для подсчета источников в аннотации
+
+\end{document}

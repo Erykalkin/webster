@@ -10,6 +10,7 @@ import numpy as np
 import torch
 from torch import nn
 from tqdm.auto import tqdm
+import metrics as spectral_metrics
 
 try:
     import matplotlib.pyplot as plt
@@ -23,7 +24,8 @@ except ImportError:  # live notebook plotting is optional
 
 
 BatchToXY = Callable[[Any, torch.device], tuple[Any, torch.Tensor]]
-MetricFn = Callable[[torch.Tensor, torch.Tensor], torch.Tensor | float]
+MetricFn = Callable[..., torch.Tensor | float]
+MetricSpec = Mapping[str, MetricFn] | Sequence[str] | None
 StepCallback = Callable[[int, float], None]
 
 
@@ -47,6 +49,7 @@ class TrainConfig:
     checkpoint_name: str | None = None
     save_best: bool = True
     save_every_steps: int | None = None
+    validation_metrics: MetricSpec = None
 
 
 @dataclass
@@ -373,11 +376,189 @@ def relative_l2_metric(pred: torch.Tensor, target: torch.Tensor, eps: float = 1e
     return torch.mean(error / denom)
 
 
+def _batch_frequencies(batch: Mapping[str, Any], device: torch.device) -> torch.Tensor:
+    if "frequencies_hz" not in batch:
+        raise KeyError("batch must contain frequencies_hz for spectral validation metrics")
+    return batch["frequencies_hz"].to(device).float()
+
+
+def _is_complex_like_target(target: torch.Tensor) -> bool:
+    return torch.is_complex(target) or (target.ndim >= 3 and target.shape[-1] == 2)
+
+
+def _magnitude_mae_metric(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    batch: Mapping[str, Any],
+) -> torch.Tensor:
+    if _is_complex_like_target(target):
+        return spectral_metrics.magnitude_mae_db_from_complex(pred, target)
+    return spectral_metrics.mae_db(pred.float(), target.float())
+
+
+def _magnitude_rmse_metric(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    batch: Mapping[str, Any],
+) -> torch.Tensor:
+    if _is_complex_like_target(target):
+        return spectral_metrics.magnitude_rmse_db_from_complex(pred, target)
+    return spectral_metrics.rmse_db(pred.float(), target.float())
+
+
+def _magnitude_max_abs_metric(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    batch: Mapping[str, Any],
+) -> torch.Tensor:
+    if _is_complex_like_target(target):
+        return spectral_metrics.magnitude_max_abs_error_db_from_complex(pred, target)
+    return spectral_metrics.max_abs_error_db(pred.float(), target.float())
+
+
+def _relative_derivative_metric(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    batch: Mapping[str, Any],
+) -> torch.Tensor:
+    frequencies = _batch_frequencies(batch, pred.device)
+    return spectral_metrics.relative_frequency_derivative_l2(pred, target, frequencies)
+
+
+def _dominant_peak_frequency_metric(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    batch: Mapping[str, Any],
+) -> torch.Tensor:
+    frequencies = _batch_frequencies(batch, pred.device)
+    if _is_complex_like_target(target):
+        pred_db = spectral_metrics.complex_ri_to_db(pred)
+        target_db = spectral_metrics.complex_ri_to_db(target)
+    else:
+        pred_db = pred.float()
+        target_db = target.float()
+    return spectral_metrics.dominant_peak_frequency_mae_hz(pred_db, target_db, frequencies)
+
+
+def _dominant_peak_level_metric(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    batch: Mapping[str, Any],
+) -> torch.Tensor:
+    frequencies = _batch_frequencies(batch, pred.device)
+    if _is_complex_like_target(target):
+        pred_db = spectral_metrics.complex_ri_to_db(pred)
+        target_db = spectral_metrics.complex_ri_to_db(target)
+    else:
+        pred_db = pred.float()
+        target_db = target.float()
+    return spectral_metrics.dominant_peak_level_mae_db(pred_db, target_db, frequencies)
+
+
+def _dominant_notch_frequency_metric(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    batch: Mapping[str, Any],
+) -> torch.Tensor:
+    frequencies = _batch_frequencies(batch, pred.device)
+    if _is_complex_like_target(target):
+        pred_db = spectral_metrics.complex_ri_to_db(pred)
+        target_db = spectral_metrics.complex_ri_to_db(target)
+    else:
+        pred_db = pred.float()
+        target_db = target.float()
+    return spectral_metrics.dominant_notch_frequency_mae_hz(pred_db, target_db, frequencies)
+
+
+def _dominant_notch_level_metric(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    batch: Mapping[str, Any],
+) -> torch.Tensor:
+    frequencies = _batch_frequencies(batch, pred.device)
+    if _is_complex_like_target(target):
+        pred_db = spectral_metrics.complex_ri_to_db(pred)
+        target_db = spectral_metrics.complex_ri_to_db(target)
+    else:
+        pred_db = pred.float()
+        target_db = target.float()
+    return spectral_metrics.dominant_notch_level_mae_db(pred_db, target_db, frequencies)
+
+
+def _relative_complex_l2_percent_metric(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    batch: Mapping[str, Any],
+) -> torch.Tensor:
+    if not _is_complex_like_target(target):
+        return torch.tensor(float("nan"), device=pred.device)
+    return spectral_metrics.relative_complex_l2_percent(pred, target)
+
+
+def _phase_mae_degrees_metric(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    batch: Mapping[str, Any],
+) -> torch.Tensor:
+    if not _is_complex_like_target(target):
+        return torch.tensor(float("nan"), device=pred.device)
+    return spectral_metrics.phase_mae_degrees(pred, target)
+
+
 DEFAULT_REGRESSION_METRICS: dict[str, MetricFn] = {
     "mae": mae_metric,
     "rmse": rmse_metric,
     "rel_l2": relative_l2_metric,
 }
+
+
+DEFAULT_VALIDATION_METRICS: dict[str, MetricFn] = {
+    **DEFAULT_REGRESSION_METRICS,
+    "magnitude_mae_db": _magnitude_mae_metric,
+    "magnitude_rmse_db": _magnitude_rmse_metric,
+    "magnitude_max_abs_error_db": _magnitude_max_abs_metric,
+    "relative_derivative_l2": _relative_derivative_metric,
+    "dominant_peak_frequency_mae_hz": _dominant_peak_frequency_metric,
+    "dominant_peak_level_mae_db": _dominant_peak_level_metric,
+    "dominant_notch_frequency_mae_hz": _dominant_notch_frequency_metric,
+    "dominant_notch_level_mae_db": _dominant_notch_level_metric,
+    "relative_complex_l2_percent": _relative_complex_l2_percent_metric,
+    "phase_mae_degrees": _phase_mae_degrees_metric,
+}
+
+
+def resolve_metrics(metrics: MetricSpec) -> dict[str, MetricFn]:
+    if metrics is None:
+        return dict(DEFAULT_VALIDATION_METRICS)
+    if isinstance(metrics, Mapping):
+        return dict(metrics)
+
+    resolved: dict[str, MetricFn] = {}
+    unknown: list[str] = []
+    for name in metrics:
+        if name in DEFAULT_VALIDATION_METRICS:
+            resolved[name] = DEFAULT_VALIDATION_METRICS[name]
+        else:
+            unknown.append(str(name))
+
+    if unknown:
+        available = ", ".join(sorted(DEFAULT_VALIDATION_METRICS))
+        missing = ", ".join(unknown)
+        raise KeyError(f"Unknown metric name(s): {missing}. Available metrics: {available}")
+
+    return resolved
+
+
+def _compute_metric(
+    metric_fn: MetricFn,
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    batch: Mapping[str, Any],
+) -> torch.Tensor | float:
+    try:
+        return metric_fn(pred, target, batch)
+    except TypeError:
+        return metric_fn(pred, target)
 
 
 def train_one_epoch(
@@ -442,7 +623,7 @@ def evaluate(
     *,
     batch_to_xy: BatchToXY = webster_batch_to_xy,
     device: str | torch.device | None = None,
-    metrics: Mapping[str, MetricFn] | None = DEFAULT_REGRESSION_METRICS,
+    metrics: MetricSpec = None,
     show_progress: bool = True,
     max_steps: int | None = None,
     loss_log: list[float] | None = None,
@@ -450,9 +631,10 @@ def evaluate(
 ) -> tuple[float, dict[str, float]]:
     device = torch.device(device or next(model.parameters()).device)
     model.eval()
+    resolved_metrics = resolve_metrics(metrics)
 
     losses: list[float] = []
-    metric_values: dict[str, list[float]] = {name: [] for name in (metrics or {})}
+    metric_values: dict[str, list[float]] = {name: [] for name in resolved_metrics}
 
     iterator = tqdm(loader, total=max_steps, leave=False, disable=not show_progress)
     for step, batch in enumerate(iterator, start=1):
@@ -469,8 +651,8 @@ def evaluate(
         if on_step_end is not None:
             on_step_end(step, loss_value)
 
-        for name, metric_fn in (metrics or {}).items():
-            value = metric_fn(pred, target)
+        for name, metric_fn in resolved_metrics.items():
+            value = _compute_metric(metric_fn, pred, target, batch)
             if torch.is_tensor(value):
                 value = float(value.detach().cpu())
             metric_values[name].append(float(value))
@@ -530,14 +712,15 @@ def fit(
     *,
     batch_to_xy: BatchToXY = webster_batch_to_xy,
     scheduler: Any = None,
-    metrics: Mapping[str, MetricFn] | None = DEFAULT_REGRESSION_METRICS,
+    metrics: MetricSpec = None,
     config: TrainConfig | None = None,
 ) -> TrainHistory:
     config = config or TrainConfig()
     device = torch.device(config.device)
     model.to(device)
+    resolved_metrics = resolve_metrics(metrics if metrics is not None else config.validation_metrics)
 
-    history = TrainHistory(metrics={name: [] for name in (metrics or {})})
+    history = TrainHistory(metrics={name: [] for name in resolved_metrics})
     history.planned_epochs = config.epochs
     if config.steps_per_epoch is not None:
         history.planned_train_steps = config.epochs * config.steps_per_epoch
@@ -620,7 +803,7 @@ def fit(
                 criterion,
                 batch_to_xy=batch_to_xy,
                 device=device,
-                metrics=metrics,
+                metrics=resolved_metrics,
                 show_progress=config.show_progress,
                 max_steps=config.val_steps,
                 loss_log=history.step_val_loss,
@@ -879,15 +1062,10 @@ def val(
     batch_to_xy: BatchToXY = webster_batch_to_xy,
     device: str | torch.device | None = None,
     metric_names: Sequence[str] | None = None,
+    metrics: MetricSpec = None,
     **kwargs: Any,
 ) -> tuple[float, dict[str, float] | None]:
-    selected_metrics = None
-    if metric_names:
-        selected_metrics = {
-            name: DEFAULT_REGRESSION_METRICS[name]
-            for name in metric_names
-            if name in DEFAULT_REGRESSION_METRICS
-        }
+    selected_metrics = metrics if metrics is not None else metric_names
     loss, metric_values = evaluate(
         model,
         loader,
@@ -897,7 +1075,7 @@ def val(
         metrics=selected_metrics,
         **kwargs,
     )
-    return loss, metric_values if metric_names else None
+    return loss, metric_values if selected_metrics is not None else None
 
 
 def learning_loop(
@@ -911,6 +1089,7 @@ def learning_loop(
     epochs: int = 10,
     val_every: int = 1,
     metric_names: Sequence[str] | None = None,
+    metrics: MetricSpec = None,
     batch_to_xy: BatchToXY = webster_batch_to_xy,
     device: str | torch.device | None = None,
     min_lr: float | None = None,
@@ -918,13 +1097,7 @@ def learning_loop(
     val_steps: int | None = None,
     **kwargs: Any,
 ) -> tuple[nn.Module, torch.optim.Optimizer, dict[str, list[float]], list[float], dict[str, list[float]] | None]:
-    metrics = None
-    if metric_names:
-        metrics = {
-            name: DEFAULT_REGRESSION_METRICS[name]
-            for name in metric_names
-            if name in DEFAULT_REGRESSION_METRICS
-        }
+    selected_metrics = metrics if metrics is not None else metric_names
 
     history = fit(
         model,
@@ -934,7 +1107,7 @@ def learning_loop(
         criterion,
         batch_to_xy=batch_to_xy,
         scheduler=scheduler,
-        metrics=metrics,
+        metrics=selected_metrics,
         config=TrainConfig(
             epochs=epochs,
             val_every=val_every,
@@ -947,4 +1120,4 @@ def learning_loop(
     )
 
     losses = {"train": history.train_loss, "val": history.val_loss}
-    return model, optimizer, losses, history.lr, history.metrics if metric_names else None
+    return model, optimizer, losses, history.lr, history.metrics if selected_metrics is not None else None

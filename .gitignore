@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints/
+.pytest_cache/
+.venv/
+venv/
+ENV/
+env/
+
+# Jupyter Notebooks large outputs (optional, but good practice)
+# .ipynb_checkpoints
+
+# C++ Build and Binaries
+bin/
+*.exe
+*.o
+*.obj
+*.out
+*.app
+
+# LaTeX Temporary Files (generated during compilation)
+article/*.aux
+article/*.fls
+article/*.fdb_latexmk
+article/*.log
+article/*.out
+article/*.toc
+article/*.synctex.gz
+article/*.bbl
+article/*.blg
+article/*.pdf
+article/*.run.xml
+article/*.bcf
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+*~

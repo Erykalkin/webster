@@ -493,12 +493,12 @@ def dominant_peak_frequency_mae_hz(
     Доминирующий резонанс определяется как глобальный максимум АЧХ
     в рассматриваемом частотном диапазоне.
     """
-    pred, target = _curves_with_frequency_last(
+    pred, target, frequencies_1d = _curves_with_frequency_last(
         prediction_db, target_db, frequencies
     )
     pred_idx = pred.argmax(dim=-1)
     target_idx = target.argmax(dim=-1)
-    error = (frequencies[pred_idx] - frequencies[target_idx]).abs()
+    error = (frequencies_1d[pred_idx] - frequencies_1d[target_idx]).abs()
     return error.mean()
 
 
@@ -513,14 +513,14 @@ def dominant_peak_frequency_relative_mae_percent(
 
     Нормирует абсолютное смещение резонанса на истинную резонансную частоту.
     """
-    pred, target = _curves_with_frequency_last(
+    pred, target, frequencies_1d = _curves_with_frequency_last(
         prediction_db, target_db, frequencies
     )
     pred_idx = pred.argmax(dim=-1)
     target_idx = target.argmax(dim=-1)
 
-    pred_frequency = frequencies[pred_idx]
-    target_frequency = frequencies[target_idx]
+    pred_frequency = frequencies_1d[pred_idx]
+    target_frequency = frequencies_1d[target_idx]
 
     error_percent = (
         (pred_frequency - target_frequency).abs()
@@ -540,7 +540,7 @@ def dominant_peak_level_mae_db(
 
     Сравнивает высоту максимального пика предсказанной и эталонной АЧХ.
     """
-    pred, target = _curves_with_frequency_last(
+    pred, target, _ = _curves_with_frequency_last(
         prediction_db, target_db, frequencies
     )
     pred_level = pred.amax(dim=-1)
@@ -559,12 +559,12 @@ def dominant_notch_frequency_mae_hz(
     Доминирующий антирезонанс определяется как глобальный минимум АЧХ
     в рассматриваемом диапазоне.
     """
-    pred, target = _curves_with_frequency_last(
+    pred, target, frequencies_1d = _curves_with_frequency_last(
         prediction_db, target_db, frequencies
     )
     pred_idx = pred.argmin(dim=-1)
     target_idx = target.argmin(dim=-1)
-    error = (frequencies[pred_idx] - frequencies[target_idx]).abs()
+    error = (frequencies_1d[pred_idx] - frequencies_1d[target_idx]).abs()
     return error.mean()
 
 
@@ -578,7 +578,7 @@ def dominant_notch_level_mae_db(
 
     Сравнивает минимальные уровни предсказанной и эталонной АЧХ.
     """
-    pred, target = _curves_with_frequency_last(
+    pred, target, _ = _curves_with_frequency_last(
         prediction_db, target_db, frequencies
     )
     pred_level = pred.amin(dim=-1)
@@ -590,7 +590,7 @@ def _curves_with_frequency_last(
     prediction_db: Tensor,
     target_db: Tensor,
     frequencies: Tensor,
-) -> tuple[Tensor, Tensor]:
+) -> tuple[Tensor, Tensor, Tensor]:
     """
     Приводит АЧХ к форме [число_кривых, Nf].
 
@@ -606,6 +606,7 @@ def _curves_with_frequency_last(
     return (
         pred.reshape(-1, n_frequencies),
         target.reshape(-1, n_frequencies),
+        frequencies,
     )
 
 
@@ -675,14 +676,14 @@ def dominant_peak_bandwidth_mae_hz(
     затухание и резонансную полосу. Кривые без двух пересечений уровня -3 дБ
     исключаются из усреднения.
     """
-    pred, target = _curves_with_frequency_last(
+    pred, target, frequencies_1d = _curves_with_frequency_last(
         prediction_db, target_db, frequencies
     )
 
     errors: list[float] = []
     for pred_curve, target_curve in zip(pred, target):
-        _, pred_bw = _dominant_peak_bandwidth_3db(pred_curve, frequencies)
-        _, target_bw = _dominant_peak_bandwidth_3db(target_curve, frequencies)
+        _, pred_bw = _dominant_peak_bandwidth_3db(pred_curve, frequencies_1d)
+        _, target_bw = _dominant_peak_bandwidth_3db(target_curve, frequencies_1d)
         if np.isfinite(pred_bw) and np.isfinite(target_bw):
             errors.append(abs(pred_bw - target_bw))
 
@@ -714,17 +715,17 @@ def dominant_peak_quality_factor_relative_mae_percent(
 
     Кривые без корректно определяемой ширины -3 дБ исключаются.
     """
-    pred, target = _curves_with_frequency_last(
+    pred, target, frequencies_1d = _curves_with_frequency_last(
         prediction_db, target_db, frequencies
     )
 
     errors: list[float] = []
     for pred_curve, target_curve in zip(pred, target):
         pred_fr, pred_bw = _dominant_peak_bandwidth_3db(
-            pred_curve, frequencies
+            pred_curve, frequencies_1d
         )
         target_fr, target_bw = _dominant_peak_bandwidth_3db(
-            target_curve, frequencies
+            target_curve, frequencies_1d
         )
 
         if (
@@ -848,13 +849,13 @@ def _all_peak_matches(
     max_match_distance_hz: float,
 ) -> list[tuple[PeakMatchResult, np.ndarray, np.ndarray, np.ndarray]]:
     """Готовит результаты сопоставления пиков для всех кривых."""
-    pred, target = _curves_with_frequency_last(
+    pred, target, frequencies_1d = _curves_with_frequency_last(
         prediction_db, target_db, frequencies
     )
 
     pred_np = pred.detach().cpu().double().numpy()
     target_np = target.detach().cpu().double().numpy()
-    frequencies_np = frequencies.detach().cpu().double().numpy()
+    frequencies_np = frequencies_1d.detach().cpu().double().numpy()
 
     results = []
     for pred_curve, target_curve in zip(pred_np, target_np):

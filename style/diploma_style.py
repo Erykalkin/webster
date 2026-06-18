@@ -36,6 +36,7 @@ COLORS: dict[str, str] = {
     "red":        "#D55E00",   # ошибка / выделение
     "purple":     "#CC79A7",   # дополнительный
     "cyan":       "#56B4E9",   # светлый акцент
+    "pink":       "#DB2777",   # розовый / маджента
     "yellow":     "#F0E442",   # маркер
     "black":      "#000000",
     "grey":       "#999999",
@@ -50,6 +51,7 @@ COLOR_CYCLE: list[str] = [
     COLORS["red"],
     COLORS["purple"],
     COLORS["cyan"],
+    COLORS["pink"],
 ]
 
 # Последовательность маркеров для дополнительной различимости.
@@ -76,6 +78,7 @@ def apply_style(
     fig_height_cm: float = 10.0,
     dpi: int = 150,
     use_latex: bool = False,
+    closed_frame: bool = False,
 ) -> None:
     """Применить стиль ко всем последующим графикам.
 
@@ -90,6 +93,9 @@ def apply_style(
     use_latex : bool
         Если ``True``, включается рендеринг подписей через LaTeX.
         Требует установленного TeX-дистрибутива.
+    closed_frame : bool
+        Если ``True``, рисуются все 4 стороны рамки (top + right).
+        По умолчанию ``False`` — только bottom + left.
     """
     w_inch = fig_width_cm / 2.54
     h_inch = fig_height_cm / 2.54
@@ -131,8 +137,8 @@ def apply_style(
         "axes.labelcolor": "#1a1a1a",
         "axes.titlepad": 8,
         "axes.labelpad": 5,
-        "axes.spines.top": False,
-        "axes.spines.right": False,
+        "axes.spines.top": closed_frame,
+        "axes.spines.right": closed_frame,
 
         # --- Сетка ---
         "axes.grid": True,
@@ -177,6 +183,21 @@ def apply_style(
 # ---------------------------------------------------------------------------
 # Утилиты
 # ---------------------------------------------------------------------------
+def close_frame(ax: plt.Axes, *, closed: bool = True) -> None:
+    """Включить/выключить все 4 стороны рамки для отдельного графика.
+
+    Parameters
+    ----------
+    ax : Axes
+        Ось, для которой нужно изменить рамку.
+    closed : bool
+        ``True`` — показать все 4 стороны,
+        ``False`` — оставить только bottom + left.
+    """
+    ax.spines["top"].set_visible(closed)
+    ax.spines["right"].set_visible(closed)
+
+
 def save(
     fig: plt.Figure,
     name: str,
