@@ -25,6 +25,7 @@ except ImportError:  # live notebook plotting is optional
 
 BatchToXY = Callable[[Any, torch.device], tuple[Any, torch.Tensor]]
 MetricFn = Callable[..., torch.Tensor | float]
+CriterionFn = Callable[..., torch.Tensor | tuple[torch.Tensor, Any]]
 MetricSpec = Mapping[str, MetricFn] | Sequence[str] | None
 StepCallback = Callable[[int, float], None]
 
@@ -561,11 +562,35 @@ def _compute_metric(
         return metric_fn(pred, target)
 
 
+def _compute_loss(
+    criterion: CriterionFn,
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    batch: Mapping[str, Any],
+) -> torch.Tensor:
+    frequencies = batch.get("frequencies_hz")
+
+    if frequencies is not None:
+        try:
+            loss = criterion(pred, target, frequencies.to(pred.device).float())
+        except TypeError:
+            loss = None
+        else:
+            return loss[0] if isinstance(loss, tuple) else loss
+
+    try:
+        loss = criterion(pred, target, batch)
+    except TypeError:
+        loss = criterion(pred, target)
+
+    return loss[0] if isinstance(loss, tuple) else loss
+
+
 def train_one_epoch(
     model: nn.Module,
     optimizer: torch.optim.Optimizer,
     loader: torch.utils.data.DataLoader,
-    criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = mse_loss,
+    criterion: CriterionFn = mse_loss,
     *,
     batch_to_xy: BatchToXY = webster_batch_to_xy,
     device: str | torch.device | None = None,
@@ -589,7 +614,7 @@ def train_one_epoch(
 
         with torch.autocast(device_type=device.type, enabled=use_amp and device.type == "cuda"):
             pred = _call_model(model, inputs)
-            loss = criterion(pred, target)
+            loss = _compute_loss(criterion, pred, target, batch)
 
         scaler.scale(loss).backward()
 
@@ -619,7 +644,7 @@ def train_one_epoch(
 def evaluate(
     model: nn.Module,
     loader: torch.utils.data.DataLoader,
-    criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = mse_loss,
+    criterion: CriterionFn = mse_loss,
     *,
     batch_to_xy: BatchToXY = webster_batch_to_xy,
     device: str | torch.device | None = None,
@@ -640,7 +665,7 @@ def evaluate(
     for step, batch in enumerate(iterator, start=1):
         inputs, target = batch_to_xy(batch, device)
         pred = _call_model(model, inputs)
-        loss = criterion(pred, target)
+        loss = _compute_loss(criterion, pred, target, batch)
 
         loss_value = float(loss.detach().cpu())
         losses.append(loss_value)
@@ -708,7 +733,7 @@ def fit(
     optimizer: torch.optim.Optimizer,
     train_loader: torch.utils.data.DataLoader,
     val_loader: torch.utils.data.DataLoader | None = None,
-    criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = mse_loss,
+    criterion: CriterionFn = mse_loss,
     *,
     batch_to_xy: BatchToXY = webster_batch_to_xy,
     scheduler: Any = None,
@@ -1036,7 +1061,7 @@ def train(
     model: nn.Module,
     optimizer: torch.optim.Optimizer,
     loader: torch.utils.data.DataLoader,
-    criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = mse_loss,
+    criterion: CriterionFn = mse_loss,
     *,
     batch_to_xy: BatchToXY = webster_batch_to_xy,
     device: str | torch.device | None = None,
@@ -1057,7 +1082,7 @@ def train(
 def val(
     model: nn.Module,
     loader: torch.utils.data.DataLoader,
-    criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = mse_loss,
+    criterion: CriterionFn = mse_loss,
     *,
     batch_to_xy: BatchToXY = webster_batch_to_xy,
     device: str | torch.device | None = None,
@@ -1083,7 +1108,7 @@ def learning_loop(
     optimizer: torch.optim.Optimizer,
     train_loader: torch.utils.data.DataLoader,
     val_loader: torch.utils.data.DataLoader | None,
-    criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = mse_loss,
+    criterion: CriterionFn = mse_loss,
     *,
     scheduler: Any = None,
     epochs: int = 10,
