@@ -881,6 +881,540 @@ class FrequencyTrunkNet(nn.Module):
         return self.network(features)
 
 
+class SineLayer(nn.Module):
+    """
+    Linear layer with SIREN sine activation.
+
+    Input:
+        [..., in_features]
+
+    Output:
+        [..., out_features]
+    """
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        *,
+        is_first: bool = False,
+        omega_0: float = 30.0,
+        bias: bool = True,
+    ) -> None:
+        super().__init__()
+
+        if in_features < 1:
+            raise ValueError("in_features must be >= 1")
+        if out_features < 1:
+            raise ValueError("out_features must be >= 1")
+        if omega_0 <= 0.0:
+            raise ValueError("omega_0 must be positive")
+
+        self.in_features = in_features
+        self.is_first = is_first
+        self.omega_0 = omega_0
+
+        self.linear = nn.Linear(
+            in_features,
+            out_features,
+            bias=bias,
+        )
+
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        with torch.no_grad():
+            if self.is_first:
+                bound = 1.0 / self.in_features
+            else:
+                bound = math.sqrt(6.0 / self.in_features) / self.omega_0
+
+            self.linear.weight.uniform_(-bound, bound)
+
+            if self.linear.bias is not None:
+                self.linear.bias.uniform_(-bound, bound)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return torch.sin(self.omega_0 * self.linear(x))
+
+
+class FrequencySIRENTrunkNet(nn.Module):
+    """
+    SIREN trunk network for DeepONet.
+
+    Converts dimensionless frequency
+
+        kappa: [B, Nf, input_dim]
+
+    to learned basis functions
+
+        basis: [B, Nf, basis_dim]
+    """
+
+    def __init__(
+        self,
+        basis_dim: int = 128,
+        input_dim: int = 1,
+        hidden_dim: int = 128,
+        n_hidden_layers: int = 3,
+        first_omega_0: float = 10.0,
+        hidden_omega_0: float = 10.0,
+    ) -> None:
+        super().__init__()
+
+        if basis_dim < 1:
+            raise ValueError("basis_dim must be >= 1")
+        if input_dim < 1:
+            raise ValueError("input_dim must be >= 1")
+        if hidden_dim < 1:
+            raise ValueError("hidden_dim must be >= 1")
+        if n_hidden_layers < 1:
+            raise ValueError("n_hidden_layers must be >= 1")
+
+        layers: list[nn.Module] = [
+            SineLayer(
+                input_dim,
+                hidden_dim,
+                is_first=True,
+                omega_0=first_omega_0,
+            )
+        ]
+
+        for _ in range(n_hidden_layers - 1):
+            layers.append(
+                SineLayer(
+                    hidden_dim,
+                    hidden_dim,
+                    is_first=False,
+                    omega_0=hidden_omega_0,
+                )
+            )
+
+        final_layer = nn.Linear(hidden_dim, basis_dim)
+        with torch.no_grad():
+            bound = math.sqrt(6.0 / hidden_dim) / hidden_omega_0
+            final_layer.weight.uniform_(-bound, bound)
+
+            if final_layer.bias is not None:
+                final_layer.bias.uniform_(-bound, bound)
+
+        layers.append(final_layer)
+        self.network = nn.Sequential(*layers)
+
+    def forward(self, kappa: Tensor) -> Tensor:
+        if kappa.ndim != 3:
+            raise ValueError(
+                "kappa must have shape [B, Nf, input_dim], "
+                f"got {tuple(kappa.shape)}"
+            )
+
+        return self.network(kappa)
+
+
+class GeometryTokenEncoder(nn.Module):
+    """
+    Geometry encoder that keeps the spatial sequence.
+
+    Input:
+        area: [B, C, Nx]
+
+    Output:
+        tokens: [B, Nx, D]
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 1,
+        d_model: int = 128,
+        hidden_channels: int | None = None,
+    ) -> None:
+        super().__init__()
+
+        hidden_channels = hidden_channels or d_model
+        self.in_channels = in_channels
+
+        self.stem = nn.Sequential(
+            nn.Conv1d(
+                in_channels,
+                hidden_channels,
+                kernel_size=7,
+                padding=3,
+            ),
+            nn.GroupNorm(
+                num_groups=min(8, hidden_channels),
+                num_channels=hidden_channels,
+            ),
+            nn.GELU(),
+        )
+
+        self.blocks = nn.Sequential(
+            ResidualConvBlock1d(hidden_channels, kernel_size=5, dilation=1),
+            ResidualConvBlock1d(hidden_channels, kernel_size=5, dilation=2),
+            ResidualConvBlock1d(hidden_channels, kernel_size=5, dilation=4),
+            ResidualConvBlock1d(hidden_channels, kernel_size=5, dilation=8),
+        )
+
+        self.projection = nn.Conv1d(
+            hidden_channels,
+            d_model,
+            kernel_size=1,
+        )
+
+    def forward(self, area: Tensor) -> Tensor:
+        if area.ndim != 3:
+            raise ValueError(
+                "area must have shape [B, C, Nx], "
+                f"got {tuple(area.shape)}"
+            )
+        if area.shape[1] != self.in_channels:
+            raise ValueError(
+                f"Expected {self.in_channels} area channels, "
+                f"got {area.shape[1]}"
+            )
+
+        x = self.stem(area)
+        x = self.blocks(x)
+        x = self.projection(x)
+        return x.transpose(1, 2).contiguous()
+
+
+class FrequencyTokenEncoder(nn.Module):
+    """
+    Frequency encoder for frequency-conditioned sequence operators.
+
+    Input:
+        kappa: [B, Nf, 1]
+
+    Output:
+        tokens: [B, Nf, D]
+    """
+
+    def __init__(
+        self,
+        d_model: int = 128,
+        frequency_bands: int = 16,
+        hidden_dim: int | None = None,
+    ) -> None:
+        super().__init__()
+
+        hidden_dim = hidden_dim or d_model
+        self.frequency_embedding = FrequencyEmbedding(
+            n_bands=frequency_bands,
+        )
+        input_dim = 1 + 2 * frequency_bands
+        self.network = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.GELU(),
+            nn.LayerNorm(hidden_dim),
+            nn.Linear(hidden_dim, d_model),
+        )
+
+    def forward(self, kappa: Tensor) -> Tensor:
+        if kappa.ndim != 3 or kappa.shape[-1] != 1:
+            raise ValueError(
+                "kappa must have shape [B, Nf, 1], "
+                f"got {tuple(kappa.shape)}"
+            )
+        return self.network(self.frequency_embedding(kappa))
+
+
+class LightweightMambaBlock(nn.Module):
+    """
+    Local Mamba-like sequence block with the same [B, L, D] interface.
+
+    This is intentionally dependency-free. It is not a drop-in replacement for
+    mamba-ssm internals, but gives the project a cheap gated state/conv-style
+    sequence block that can later be swapped for a real Mamba module.
+    """
+
+    def __init__(
+        self,
+        d_model: int = 128,
+        depth: int = 2,
+        expansion: int = 2,
+        kernel_size: int = 9,
+        dropout: float = 0.0,
+    ) -> None:
+        super().__init__()
+
+        if d_model < 1:
+            raise ValueError("d_model must be >= 1")
+        if depth < 1:
+            raise ValueError("depth must be >= 1")
+        if expansion < 1:
+            raise ValueError("expansion must be >= 1")
+        if kernel_size < 1:
+            raise ValueError("kernel_size must be >= 1")
+
+        hidden_dim = d_model * expansion
+        padding = kernel_size // 2
+
+        self.layers = nn.ModuleList()
+        for _ in range(depth):
+            self.layers.append(
+                nn.ModuleDict(
+                    {
+                        "norm": nn.LayerNorm(d_model),
+                        "in_proj": nn.Linear(d_model, 2 * hidden_dim),
+                        "conv": nn.Conv1d(
+                            hidden_dim,
+                            hidden_dim,
+                            kernel_size=kernel_size,
+                            padding=padding,
+                            groups=hidden_dim,
+                        ),
+                        "out_proj": nn.Linear(hidden_dim, d_model),
+                        "dropout": nn.Dropout(dropout),
+                    }
+                )
+            )
+
+    def forward(self, x: Tensor) -> Tensor:
+        if x.ndim != 3:
+            raise ValueError(
+                "x must have shape [B, L, D], "
+                f"got {tuple(x.shape)}"
+            )
+
+        for layer in self.layers:
+            residual = x
+            x_norm = layer["norm"](x)
+            value, gate = layer["in_proj"](x_norm).chunk(2, dim=-1)
+            value = value.transpose(1, 2).contiguous()
+            value = layer["conv"](value)
+            value = value.transpose(1, 2).contiguous()
+            value = torch.nn.functional.silu(value)
+            value = value * torch.sigmoid(gate)
+            value = layer["out_proj"](value)
+            x = residual + layer["dropout"](value)
+
+        return x
+
+
+class FrequencyConditionedMambaOperator(nn.Module):
+    """
+    Frequency-conditioned bidirectional sequence operator over the tube axis.
+
+    The geometry tokens are FiLM-conditioned by each frequency, then processed
+    along x in both directions. To avoid materializing all frequencies at once,
+    use frequency_chunk_size.
+    """
+
+    def __init__(
+        self,
+        geometry_encoder: nn.Module,
+        frequency_encoder: nn.Module,
+        mamba_forward: nn.Module,
+        mamba_backward: nn.Module,
+        d_model: int = 128,
+        out_channels: int = 2,
+        frequency_chunk_size: int | None = 32,
+    ) -> None:
+        super().__init__()
+
+        if d_model < 1:
+            raise ValueError("d_model must be >= 1")
+        if out_channels < 1:
+            raise ValueError("out_channels must be >= 1")
+        if frequency_chunk_size is not None and frequency_chunk_size < 1:
+            raise ValueError("frequency_chunk_size must be >= 1 or None")
+
+        self.geometry_encoder = geometry_encoder
+        self.frequency_encoder = frequency_encoder
+        self.d_model = d_model
+        self.out_channels = out_channels
+        self.frequency_chunk_size = frequency_chunk_size
+
+        self.gamma_head = nn.Linear(d_model, d_model)
+        self.beta_head = nn.Linear(d_model, d_model)
+
+        self.mamba_forward = mamba_forward
+        self.mamba_backward = mamba_backward
+
+        self.fusion = nn.Linear(2 * d_model, d_model)
+
+        self.output_head = nn.Sequential(
+            nn.Linear(d_model, d_model),
+            nn.GELU(),
+            nn.Linear(d_model, out_channels),
+        )
+
+    def _forward_frequency_chunk(
+        self,
+        geometry_tokens: Tensor,
+        frequency_tokens: Tensor,
+    ) -> Tensor:
+        batch_size, n_x, d_model = geometry_tokens.shape
+        n_frequencies = frequency_tokens.shape[1]
+
+        gamma = self.gamma_head(frequency_tokens)
+        beta = self.beta_head(frequency_tokens)
+
+        conditioned_geometry = (
+            geometry_tokens[:, None, :, :]
+            * (1.0 + gamma[:, :, None, :])
+            + beta[:, :, None, :]
+        )
+
+        conditioned_geometry = conditioned_geometry.reshape(
+            batch_size * n_frequencies,
+            n_x,
+            d_model,
+        )
+
+        forward_features = self.mamba_forward(conditioned_geometry)
+
+        backward_input = torch.flip(
+            conditioned_geometry,
+            dims=[1],
+        )
+        backward_features = self.mamba_backward(backward_input)
+        backward_features = torch.flip(
+            backward_features,
+            dims=[1],
+        )
+
+        spatial_features = self.fusion(
+            torch.cat(
+                [forward_features, backward_features],
+                dim=-1,
+            )
+        )
+
+        pooled = spatial_features.mean(dim=1)
+        output = self.output_head(pooled)
+
+        return output.reshape(
+            batch_size,
+            n_frequencies,
+            self.out_channels,
+        )
+
+    def forward(
+        self,
+        area: Tensor,
+        kappa: Tensor,
+    ) -> Tensor:
+        geometry_tokens = self.geometry_encoder(area)
+        frequency_tokens = self.frequency_encoder(kappa)
+
+        if geometry_tokens.ndim != 3:
+            raise ValueError(
+                "geometry_encoder must return [B, Nx, D], "
+                f"got {tuple(geometry_tokens.shape)}"
+            )
+        if frequency_tokens.ndim != 3:
+            raise ValueError(
+                "frequency_encoder must return [B, Nf, D], "
+                f"got {tuple(frequency_tokens.shape)}"
+            )
+        if geometry_tokens.shape[0] != frequency_tokens.shape[0]:
+            raise ValueError("geometry and frequency batch sizes must match")
+        if geometry_tokens.shape[-1] != self.d_model:
+            raise ValueError(
+                f"Expected geometry token dim {self.d_model}, "
+                f"got {geometry_tokens.shape[-1]}"
+            )
+        if frequency_tokens.shape[-1] != self.d_model:
+            raise ValueError(
+                f"Expected frequency token dim {self.d_model}, "
+                f"got {frequency_tokens.shape[-1]}"
+            )
+
+        n_frequencies = frequency_tokens.shape[1]
+        chunk_size = self.frequency_chunk_size or n_frequencies
+        outputs = []
+
+        for start in range(0, n_frequencies, chunk_size):
+            stop = min(start + chunk_size, n_frequencies)
+            outputs.append(
+                self._forward_frequency_chunk(
+                    geometry_tokens,
+                    frequency_tokens[:, start:stop, :],
+                )
+            )
+
+        return torch.cat(outputs, dim=1)
+
+
+class TransferFunctionMambaOperator(nn.Module):
+    """
+    Frequency-conditioned bidirectional Mamba-like operator.
+
+    Input:
+        area: [B, C, Nx]
+        kappa: [B, Nf, 1]
+
+    Output:
+        [B, Nf] when out_channels=1
+        [B, Nf, out_channels] otherwise
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 1,
+        d_model: int = 128,
+        hidden_channels: int | None = None,
+        frequency_bands: int = 16,
+        frequency_hidden_dim: int | None = None,
+        mamba_depth: int = 2,
+        mamba_expansion: int = 2,
+        mamba_kernel_size: int = 9,
+        dropout: float = 0.0,
+        out_channels: int = 1,
+        frequency_chunk_size: int | None = 32,
+    ) -> None:
+        super().__init__()
+
+        self.out_channels = out_channels
+        self.model_name = "transfer_function_mamba_operator"
+
+        geometry_encoder = GeometryTokenEncoder(
+            in_channels=in_channels,
+            d_model=d_model,
+            hidden_channels=hidden_channels,
+        )
+        frequency_encoder = FrequencyTokenEncoder(
+            d_model=d_model,
+            frequency_bands=frequency_bands,
+            hidden_dim=frequency_hidden_dim,
+        )
+        mamba_forward = LightweightMambaBlock(
+            d_model=d_model,
+            depth=mamba_depth,
+            expansion=mamba_expansion,
+            kernel_size=mamba_kernel_size,
+            dropout=dropout,
+        )
+        mamba_backward = LightweightMambaBlock(
+            d_model=d_model,
+            depth=mamba_depth,
+            expansion=mamba_expansion,
+            kernel_size=mamba_kernel_size,
+            dropout=dropout,
+        )
+
+        self.operator = FrequencyConditionedMambaOperator(
+            geometry_encoder=geometry_encoder,
+            frequency_encoder=frequency_encoder,
+            mamba_forward=mamba_forward,
+            mamba_backward=mamba_backward,
+            d_model=d_model,
+            out_channels=out_channels,
+            frequency_chunk_size=frequency_chunk_size,
+        )
+
+    def forward(
+        self,
+        area: Tensor,
+        kappa: Tensor,
+    ) -> Tensor:
+        output = self.operator(area, kappa)
+        if self.out_channels == 1:
+            return output.squeeze(-1)
+        return output
+
+
 class TransferFunctionDeepONet(nn.Module):
     """
     DeepONet для оператора:
@@ -991,6 +1525,105 @@ class TransferFunctionDeepONet(nn.Module):
         #     sum_p branch[b, c, p] * trunk[b, f, p]
         #
         # [B, Nf, out_channels]
+        output = torch.einsum(
+            "bcp,bfp->bfc",
+            branch_coefficients,
+            trunk_basis,
+        )
+
+        output = (
+            output * self.output_scale
+            + self.output_bias.view(1, 1, -1)
+        )
+
+        if self.out_channels == 1:
+            return output.squeeze(-1)
+
+        return output
+
+
+class TransferFunctionSIRENDeepONet(nn.Module):
+    """
+    DeepONet variant with a SIREN trunk network.
+
+    The branch encoder is the same geometry CNN as in TransferFunctionDeepONet,
+    while the trunk maps kappa directly through sine layers instead of using
+    harmonic embedding plus GELU MLP.
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 1,
+        hidden_channels: int = 64,
+        basis_dim: int = 128,
+        pooling_bins: int = 8,
+        trunk_hidden_dim: int = 128,
+        trunk_hidden_layers: int = 3,
+        first_omega_0: float = 10.0,
+        hidden_omega_0: float = 10.0,
+        out_channels: int = 1,
+    ) -> None:
+        super().__init__()
+
+        if out_channels < 1:
+            raise ValueError("out_channels must be >= 1")
+        if basis_dim < 1:
+            raise ValueError("basis_dim must be >= 1")
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.basis_dim = basis_dim
+        self.model_name = "transfer_function_siren_deeponet"
+
+        self.branch_net = GeometryBranchNet(
+            in_channels=in_channels,
+            hidden_channels=hidden_channels,
+            basis_dim=basis_dim,
+            pooling_bins=pooling_bins,
+            out_channels=out_channels,
+        )
+
+        self.trunk_net = FrequencySIRENTrunkNet(
+            basis_dim=basis_dim,
+            input_dim=1,
+            hidden_dim=trunk_hidden_dim,
+            n_hidden_layers=trunk_hidden_layers,
+            first_omega_0=first_omega_0,
+            hidden_omega_0=hidden_omega_0,
+        )
+
+        self.output_bias = nn.Parameter(torch.zeros(out_channels))
+        self.output_scale = basis_dim ** -0.5
+
+    def forward(
+        self,
+        area: Tensor,
+        kappa: Tensor,
+    ) -> Tensor:
+        if area.ndim != 3:
+            raise ValueError(
+                "area must have shape [B, C, Nx], "
+                f"got {tuple(area.shape)}"
+            )
+
+        if area.shape[1] != self.in_channels:
+            raise ValueError(
+                f"Expected {self.in_channels} area channels, "
+                f"got {area.shape[1]}"
+            )
+
+        if kappa.ndim != 3 or kappa.shape[-1] != 1:
+            raise ValueError(
+                "kappa must have shape [B, Nf, 1], "
+                f"got {tuple(kappa.shape)}"
+            )
+
+        if area.shape[0] != kappa.shape[0]:
+            raise ValueError("area and kappa batch sizes must match")
+
+        branch_coefficients = self.branch_net(area)
+        trunk_basis = self.trunk_net(kappa)
+
         output = torch.einsum(
             "bcp,bfp->bfc",
             branch_coefficients,
