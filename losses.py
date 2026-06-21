@@ -49,6 +49,7 @@ class UniversalTransferFunctionLoss(nn.Module):
         magnitude_weight: float = 0.1,
         db_derivative_weight: float = 0.05,
         peak_weight: float = 0.0,
+        peak_level_weight: float = 0.0,
 
         # РўРѕР»СЊРєРѕ complex.
         complex_weight: float = 1.0,
@@ -59,6 +60,9 @@ class UniversalTransferFunctionLoss(nn.Module):
         db_error_scale: float = 10.0,
         db_derivative_scale: float = 0.01,
         peak_temperature_db: float = 3.0,
+        peak_min_prominence_db: float = 1.0,
+        peak_min_distance_hz: float = 40.0,
+        peak_max_count: int | None = None,
         phase_dynamic_range_db: float = 40.0,
         min_db: float = -100.0,
         eps: float = 1e-8,
@@ -76,6 +80,7 @@ class UniversalTransferFunctionLoss(nn.Module):
         self.magnitude_weight = magnitude_weight
         self.db_derivative_weight = db_derivative_weight
         self.peak_weight = peak_weight
+        self.peak_level_weight = peak_level_weight
 
         self.complex_weight = complex_weight
         self.complex_derivative_weight = complex_derivative_weight
@@ -84,6 +89,9 @@ class UniversalTransferFunctionLoss(nn.Module):
         self.db_error_scale = db_error_scale
         self.db_derivative_scale = db_derivative_scale
         self.peak_temperature_db = peak_temperature_db
+        self.peak_min_prominence_db = peak_min_prominence_db
+        self.peak_min_distance_hz = peak_min_distance_hz
+        self.peak_max_count = peak_max_count
         self.phase_dynamic_range_db = phase_dynamic_range_db
         self.min_db = min_db
         self.eps = eps
@@ -345,6 +353,133 @@ class UniversalTransferFunctionLoss(nn.Module):
             prediction_peak - target_peak
         ).abs().mean() / frequency_range
 
+    def _flatten_output_channels(self, values: Tensor) -> Tensor:
+        if values.ndim == 2:
+            return values.unsqueeze(-1)
+        if values.ndim == 3:
+            return values
+        raise ValueError(
+            "Expected dB tensor with shape [B, Nf] or [B, Nf, Nout], "
+            f"got {tuple(values.shape)}"
+        )
+
+    def _target_peak_mask(
+        self,
+        target_db: Tensor,
+        frequencies: Tensor,
+    ) -> Tensor:
+        target = self._flatten_output_channels(target_db)
+        batch_size, n_frequencies, n_outputs = target.shape
+        mask = torch.zeros(
+            batch_size,
+            n_frequencies,
+            n_outputs,
+            dtype=torch.bool,
+            device=target.device,
+        )
+
+        if n_frequencies < 3:
+            return mask
+
+        df = torch.median(frequencies[1:] - frequencies[:-1]).abs()
+        min_distance = 1
+        if self.peak_min_distance_hz > 0.0:
+            min_distance = max(
+                1,
+                int(round(float(self.peak_min_distance_hz) / float(df.clamp_min(self.eps)))),
+            )
+
+        target_detached = target.detach()
+        center = target_detached[:, 1:-1, :]
+        left = target_detached[:, :-2, :]
+        right = target_detached[:, 2:, :]
+        prominence = center - torch.maximum(left, right)
+
+        candidates = (
+            (center > left)
+            & (center >= right)
+            & (prominence >= self.peak_min_prominence_db)
+        )
+
+        for batch_idx in range(batch_size):
+            for output_idx in range(n_outputs):
+                local_indices = torch.nonzero(
+                    candidates[batch_idx, :, output_idx],
+                    as_tuple=False,
+                ).flatten()
+                if local_indices.numel() == 0:
+                    continue
+
+                peak_indices = local_indices + 1
+                peak_levels = target_detached[
+                    batch_idx,
+                    peak_indices,
+                    output_idx,
+                ]
+                order = torch.argsort(
+                    peak_levels,
+                    descending=True,
+                )
+
+                selected: list[int] = []
+                for order_idx in order.tolist():
+                    peak_idx = int(peak_indices[order_idx].item())
+                    if any(abs(peak_idx - old_idx) < min_distance for old_idx in selected):
+                        continue
+                    selected.append(peak_idx)
+                    if (
+                        self.peak_max_count is not None
+                        and len(selected) >= self.peak_max_count
+                    ):
+                        break
+
+                if selected:
+                    mask[
+                        batch_idx,
+                        torch.tensor(selected, device=target.device),
+                        output_idx,
+                    ] = True
+
+        return mask
+
+    def peak_level_loss(
+        self,
+        prediction_db: Tensor,
+        target_db: Tensor,
+        frequencies: Tensor,
+    ) -> Tensor:
+        """
+        Ошибка высоты всех найденных target-пиков.
+
+        Пики ищутся только по target_db, поэтому сам поиск не обязан быть
+        дифференцируемым. Градиент идет в prediction_db в найденных частотных
+        индексах.
+        """
+        frequencies = self._normalize_frequencies(
+            frequencies,
+            prediction_db.shape[1],
+        )
+        prediction = self._flatten_output_channels(prediction_db)
+        target = self._flatten_output_channels(target_db)
+        peak_mask = self._target_peak_mask(
+            target,
+            frequencies,
+        )
+
+        if not torch.any(peak_mask):
+            return prediction.sum() * 0.0
+
+        error = (
+            prediction[peak_mask]
+            - target[peak_mask]
+        ) / self.db_error_scale
+
+        return F.smooth_l1_loss(
+            error,
+            torch.zeros_like(error),
+            beta=1.0,
+        )
+
     def relative_complex_l2(
         self,
         prediction: Tensor,
@@ -523,6 +658,11 @@ class UniversalTransferFunctionLoss(nn.Module):
                 target_db,
                 frequencies,
             ),
+            "peak_level": self.peak_level_loss(
+                prediction_db,
+                target_db,
+                frequencies,
+            ),
         }
 
         total = (
@@ -531,6 +671,7 @@ class UniversalTransferFunctionLoss(nn.Module):
             + self.db_derivative_weight
             * components["db_derivative"]
             + self.peak_weight * components["peak"]
+            + self.peak_level_weight * components["peak_level"]
         )
 
         if self.output_type == "complex":
