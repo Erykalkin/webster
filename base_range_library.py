@@ -17,11 +17,11 @@ range_library = {
         "area_right_m2": (1.0e-4, 2.0e-2),
     },
 
-    "tube_with_hole": {
-        "length_m": 1.0,
-        "base_width_m": (0.015, 0.25),
-        "random": True,
-    },
+    # "tube_with_hole": {
+    #     "length_m": 1.0,
+    #     "base_width_m": (0.015, 0.25),
+    #     "random": True,
+    # },
 
     "random_smooth": {
         "length_m": 1.0,

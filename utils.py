@@ -4,7 +4,7 @@ import copy
 import random
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, MutableMapping, Mapping, Sequence
 
 import numpy as np
 import torch
@@ -143,6 +143,153 @@ def load_model_state(
     strict: bool = True,
 ) -> torch.nn.modules.module._IncompatibleKeys:
     return model.load_state_dict(clean_state_dict(state_dict), strict=strict)
+
+
+def checkpoint_state_dict(checkpoint: Any) -> Mapping[str, Any]:
+    if isinstance(checkpoint, Mapping) and "model_state" in checkpoint:
+        return checkpoint["model_state"]
+    if isinstance(checkpoint, Mapping) and "state_dict" in checkpoint:
+        return checkpoint["state_dict"]
+    return checkpoint
+
+
+def checkpoint_history(checkpoint: Any) -> Any | None:
+    if isinstance(checkpoint, Mapping):
+        return checkpoint.get("history")
+    return None
+
+
+def history_get(history: Any | None, key: str) -> Any:
+    if history is None:
+        return []
+    if hasattr(history, "as_dict"):
+        return history.as_dict().get(key, []) or []
+    if isinstance(history, Mapping):
+        return history.get(key, []) or []
+    return getattr(history, key, []) or []
+
+
+def history_to_mapping(history: Any | None) -> Mapping[str, Any]:
+    if history is None:
+        return {}
+    if hasattr(history, "as_dict"):
+        return history.as_dict()
+    if isinstance(history, Mapping):
+        return history
+    return {
+        "train_loss": getattr(history, "train_loss", []),
+        "val_loss": getattr(history, "val_loss", []),
+        "step_train_loss": getattr(history, "step_train_loss", []),
+        "step_val_loss": getattr(history, "step_val_loss", []),
+        "lr": getattr(history, "lr", []),
+        "metrics": getattr(history, "metrics", {}),
+        "planned_train_steps": getattr(history, "planned_train_steps", None),
+        "planned_val_steps": getattr(history, "planned_val_steps", None),
+        "planned_epochs": getattr(history, "planned_epochs", None),
+        "planned_validations": getattr(history, "planned_validations", None),
+    }
+
+
+def load_history_from_checkpoint(
+    checkpoint_name: str,
+    *,
+    checkpoint_dir: str | Path = "checkpoints",
+    map_location: str | torch.device = "cpu",
+) -> Any | None:
+    checkpoint_path = Path(checkpoint_dir) / f"{checkpoint_name}_best.pt"
+    if not checkpoint_path.exists():
+        print(f"history checkpoint not found: {checkpoint_path}")
+        return None
+
+    try:
+        checkpoint = torch.load(checkpoint_path, map_location=map_location)
+    except Exception as exc:
+        print(f"failed to load history from {checkpoint_path}: {exc}")
+        return None
+
+    history = checkpoint_history(checkpoint)
+    if history is not None:
+        return history
+
+    print(f"checkpoint has no history: {checkpoint_path}")
+    return None
+
+
+def get_or_load_history(
+    namespace: MutableMapping[str, Any],
+    history_variable_name: str,
+    checkpoint_name: str,
+    *,
+    checkpoint_dir: str | Path = "checkpoints",
+    map_location: str | torch.device = "cpu",
+) -> Any | None:
+    history = namespace.get(history_variable_name)
+    if history is not None:
+        return history
+
+    history = load_history_from_checkpoint(
+        checkpoint_name,
+        checkpoint_dir=checkpoint_dir,
+        map_location=map_location,
+    )
+    if history is not None:
+        namespace[history_variable_name] = history
+    return history
+
+
+def get_or_load_model(
+    namespace: MutableMapping[str, Any],
+    *,
+    variable_name: str,
+    checkpoint_name: str,
+    factory: Callable[[], nn.Module],
+    device: str | torch.device,
+    history_variable_name: str | None = None,
+    checkpoint_dir: str | Path = "checkpoints",
+    strict: bool = True,
+    verbose: bool = True,
+) -> tuple[nn.Module | None, Any | None]:
+    existing_model = namespace.get(variable_name)
+    existing_history = (
+        namespace.get(history_variable_name)
+        if history_variable_name is not None
+        else None
+    )
+
+    device = torch.device(device)
+    if existing_model is not None:
+        existing_model = existing_model.to(device)
+        existing_model.eval()
+        if verbose:
+            print(f"{variable_name}: using model from current notebook session")
+        return existing_model, existing_history
+
+    checkpoint_path = Path(checkpoint_dir) / f"{checkpoint_name}_best.pt"
+    if not checkpoint_path.exists():
+        if verbose:
+            print(f"{variable_name}: checkpoint not found, skipping: {checkpoint_path}")
+        return None, existing_history
+
+    try:
+        model = factory().to(device)
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        load_model_state(model, checkpoint_state_dict(checkpoint), strict=strict)
+        model.eval()
+
+        history = checkpoint_history(checkpoint)
+        namespace[variable_name] = model
+        if history_variable_name is not None and history is not None:
+            namespace[history_variable_name] = history
+
+        if verbose:
+            print(f"{variable_name}: loaded checkpoint {checkpoint_path}")
+            if history is not None:
+                print(f"{variable_name}: loaded training history from checkpoint")
+        return model, history
+    except Exception as exc:
+        if verbose:
+            print(f"{variable_name}: failed to load checkpoint {checkpoint_path}: {exc}")
+        return None, existing_history
 
 
 def _safe_checkpoint_stem(name: str) -> str:
@@ -759,7 +906,12 @@ def _live_plot_history(
         return
     if clear_output is not None:
         clear_output(wait=True)
-    plot_history(history, show_steps=True, show_epoch=show_epoch)
+    plot_history(
+        history,
+        show_steps=True,
+        show_epoch=show_epoch,
+        normalize_metrics=True,
+    )
 
 
 def fit(
@@ -982,6 +1134,201 @@ def predict(
     return torch.cat(preds, dim=0), torch.cat(targets, dim=0)
 
 
+def validation_preview_batch(loader: torch.utils.data.DataLoader) -> Any:
+    return next(iter(loader))
+
+
+def predict_on_batch(
+    model: nn.Module,
+    batch_to_xy: BatchToXY,
+    batch: Any,
+    *,
+    device: str | torch.device | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    return predict(
+        model,
+        [batch],
+        batch_to_xy=batch_to_xy,
+        device=device,
+        show_progress=False,
+    )
+
+
+def batch_geometry_to_explicit(batch: Mapping[str, Any], sample_idx: int) -> Any:
+    if "geometry" not in batch:
+        raise KeyError("batch does not contain geometry")
+
+    import vt_all_solvers_wrapper as vt
+
+    geom = batch["geometry"]
+    n = int(geom["node_count"][sample_idx])
+
+    return vt.ExplicitGeometry(
+        x_m=geom["x_m"][sample_idx, :n].detach().cpu().tolist(),
+        area_m2=geom["area_m2"][sample_idx, :n].detach().cpu().tolist(),
+    )
+
+
+def plot_batch_geometry(
+    batch: Mapping[str, Any],
+    sample_idx: int,
+    ax: Any = None,
+    *,
+    title: str = "Channel geometry",
+    mode: str = "symmetric",
+    equal_aspect: bool = False,
+    linewidth: float = 1.5,
+) -> Any:
+    if plt is None:
+        raise RuntimeError("matplotlib is not installed")
+
+    import vt_all_solvers_wrapper as vt
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(5, 3.5))
+
+    geometry = batch_geometry_to_explicit(batch, sample_idx)
+    vt.plot_geometry(
+        geometry,
+        mode=mode,
+        equal_aspect=equal_aspect,
+        linewidth=linewidth,
+        ax=ax,
+        title=title,
+    )
+    ax.grid(True, alpha=0.25)
+    return ax
+
+
+def plot_model_prediction_on_channel(
+    batch: Mapping[str, Any],
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+    model_label: str,
+    *,
+    sample_idx: int = 0,
+) -> None:
+    if plt is None:
+        raise RuntimeError("matplotlib is not installed")
+    if sample_idx < 0 or sample_idx >= target.shape[0]:
+        raise IndexError(
+            f"sample_idx={sample_idx} is outside validation batch size {target.shape[0]}"
+        )
+
+    freq = batch["frequencies_hz"][sample_idx].detach().cpu()
+    pred = prediction[sample_idx]
+    y = target[sample_idx]
+
+    fig, axes = plt.subplots(1, 2, figsize=(15, 4))
+
+    plot_batch_geometry(
+        batch,
+        sample_idx,
+        axes[0],
+        title=f"Validation sample {sample_idx}",
+    )
+
+    axes[1].plot(freq, y, label="target dB", linewidth=2.0, color="black")
+    axes[1].plot(freq, pred, label=model_label, linewidth=1.8)
+    axes[1].set_xlabel("Frequency, Hz")
+    axes[1].set_ylabel("Transfer function, dB")
+    axes[1].set_title(model_label)
+    axes[1].grid(True, alpha=0.3)
+    axes[1].legend()
+
+    plt.tight_layout()
+    plt.show()
+
+    mae = torch.mean(torch.abs(pred - y)).item()
+    rmse = torch.sqrt(torch.mean((pred - y) ** 2)).item()
+    print(f"{model_label} MAE dB:  {mae:.4f}")
+    print(f"{model_label} RMSE dB: {rmse:.4f}")
+
+
+def plot_single_model_preview(
+    model: nn.Module,
+    batch_to_xy: BatchToXY,
+    model_label: str,
+    *,
+    loader: torch.utils.data.DataLoader,
+    device: str | torch.device | None = None,
+    sample_idx: int = 0,
+) -> None:
+    batch = validation_preview_batch(loader)
+    prediction, target = predict_on_batch(
+        model,
+        batch_to_xy,
+        batch,
+        device=device,
+    )
+    plot_model_prediction_on_channel(
+        batch,
+        prediction,
+        target,
+        model_label,
+        sample_idx=sample_idx,
+    )
+
+
+def make_single_geometry_batch(
+    geometry: Any,
+    solver_config: Any,
+    *,
+    geometry_kind: str | None = None,
+) -> dict[str, Any]:
+    import vt_all_solvers_wrapper as vt
+
+    result = vt.solve(
+        geometry,
+        config=solver_config,
+    )
+
+    target_db = 20.0 * torch.log10(
+        torch.tensor(result.magnitude, dtype=torch.float32).clamp_min(1e-12)
+    )
+
+    x_m, area_m2, segment_lengths_m = vt.geometry_to_tube_tuple(geometry)
+
+    return {
+        "target": target_db.unsqueeze(0),
+        "frequencies_hz": torch.tensor(result.frequencies_hz, dtype=torch.float32).unsqueeze(0),
+        "geometry": {
+            "x_m": torch.tensor([x_m], dtype=torch.float32),
+            "area_m2": torch.tensor([area_m2], dtype=torch.float32),
+            "segment_lengths_m": torch.tensor([segment_lengths_m], dtype=torch.float32),
+            "node_count": torch.tensor([len(x_m)], dtype=torch.int64),
+            "segment_count": torch.tensor([len(segment_lengths_m)], dtype=torch.int64),
+        },
+        "meta": [
+            {
+                "idx": 0,
+                "seed": None,
+                "solver": solver_config.solver,
+                "geometry_kind_requested": geometry_kind,
+            }
+        ],
+    }
+
+
+def make_unexpected_geometry(kind: str) -> Any:
+    import vt_all_solvers_wrapper as vt
+
+    if kind == "tube_with_hole":
+        return vt.make_tube_with_hole_geometry(
+            length_m=1.0,
+            base_width_m=0.015,
+            hole_center_m=0.58,
+        )
+
+    if kind == "sharp_bottleneck":
+        return vt.explicit_geometry_from_arrays(
+            x_m=[0.0, 0.18, 0.32, 0.50, 0.68, 0.82, 1.0],
+            area_m2=[8.0e-4, 8.0e-4, 1.6e-4, 1.2e-4, 1.6e-4, 8.0e-4, 8.0e-4],
+        )
+
+    raise ValueError(f"Unsupported unexpected geometry kind: {kind!r}")
+
+
 def _finite_series(values: Sequence[float]) -> tuple[list[int], list[float]]:
     xs: list[int] = []
     ys: list[float] = []
@@ -1024,16 +1371,25 @@ def _has_finite_values(values: Sequence[float]) -> bool:
     return bool(_finite_series(values)[1])
 
 
+def _normalize_to_first(values: Sequence[float], eps: float = 1e-12) -> list[float]:
+    if not values:
+        return []
+    first = float(values[0])
+    denominator = first if abs(first) > eps else 1.0
+    return [float(value) / denominator for value in values]
+
+
 def plot_history(
     history: TrainHistory | Mapping[str, Any],
     *,
     show_steps: bool = True,
     show_epoch: bool = True,
+    normalize_metrics: bool = False,
 ) -> None:
     if plt is None:
         raise RuntimeError("matplotlib is not installed")
 
-    data = history.as_dict() if isinstance(history, TrainHistory) else history
+    data = history_to_mapping(history)
     train_loss = data.get("train_loss", [])
     val_loss = data.get("val_loss", [])
     step_train_loss = data.get("step_train_loss", [])
@@ -1115,14 +1471,70 @@ def plot_history(
             xs, ys = _finite_series(values)
             if ys:
                 xs = _one_based(xs)
+                if normalize_metrics:
+                    ys = _normalize_to_first(ys)
                 all_metric_xs.extend(xs)
                 ax.plot(xs, ys, ".-", label=name)
         _set_planned_xlim(ax, planned_validations, all_metric_xs)
-        ax.set_title("metrics")
+        ax.set_title("metrics / first value" if normalize_metrics else "metrics")
         ax.set_xlabel("validation")
+        if normalize_metrics:
+            ax.set_ylabel("relative to first value")
         ax.grid(True)
         ax.legend()
 
+    fig.tight_layout()
+    plt.show()
+
+
+def plot_selected_metrics(
+    history: TrainHistory | Mapping[str, Any] | None,
+    metric_names: Sequence[str],
+    *,
+    title: str = "Selected validation metrics",
+    xlabel: str = "validation",
+    figsize: tuple[float, float] = (10, 4),
+    normalize: bool = False,
+) -> None:
+    if plt is None:
+        raise RuntimeError("matplotlib is not installed")
+
+    if history is None:
+        print("history is None")
+        return
+
+    data = history_to_mapping(history)
+    metrics = data.get("metrics", {})
+    if not metrics:
+        print("history has no metrics")
+        return
+
+    fig, ax = plt.subplots(figsize=figsize)
+    plotted = False
+
+    for name in metric_names:
+        values = metrics.get(name, [])
+        xs, ys = _finite_series(values)
+        if not ys:
+            print(f"metric not found or empty: {name}")
+            continue
+
+        if normalize:
+            ys = _normalize_to_first(ys)
+        ax.plot(_one_based(xs), ys, ".-", label=name)
+        plotted = True
+
+    if not plotted:
+        available = ", ".join(sorted(metrics))
+        print(f"nothing to plot. Available metrics: {available}")
+        plt.close(fig)
+        return
+
+    ax.set_title(title)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel("relative to first value" if normalize else "metric value")
+    ax.grid(True, alpha=0.3)
+    ax.legend()
     fig.tight_layout()
     plt.show()
 
