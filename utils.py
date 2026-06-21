@@ -72,6 +72,40 @@ class TrainHistory:
         return asdict(self)
 
 
+def make_train_history(history: TrainHistory | Mapping[str, Any] | None = None) -> TrainHistory:
+    if history is None:
+        return TrainHistory()
+    if isinstance(history, TrainHistory):
+        return copy.deepcopy(history)
+    if not isinstance(history, Mapping):
+        raise TypeError("history must be a TrainHistory, a mapping, or None")
+
+    return TrainHistory(
+        train_loss=list(history.get("train_loss", []) or []),
+        val_loss=list(history.get("val_loss", []) or []),
+        step_train_loss=list(history.get("step_train_loss", []) or []),
+        step_val_loss=list(history.get("step_val_loss", []) or []),
+        lr=list(history.get("lr", []) or []),
+        metrics={
+            str(name): list(values or [])
+            for name, values in (history.get("metrics", {}) or {}).items()
+        },
+        planned_train_steps=history.get("planned_train_steps"),
+        planned_val_steps=history.get("planned_val_steps"),
+        planned_epochs=history.get("planned_epochs"),
+        planned_validations=history.get("planned_validations"),
+        best_checkpoint_path=history.get("best_checkpoint_path"),
+        intermediate_checkpoint_paths=list(
+            history.get("intermediate_checkpoint_paths", []) or []
+        ),
+    )
+
+
+def _best_finite(values: Sequence[float]) -> float:
+    finite = [float(value) for value in values if np.isfinite(float(value))]
+    return min(finite) if finite else float("inf")
+
+
 def set_seed(seed: int, *, deterministic: bool = False) -> None:
     random.seed(seed)
     np.random.seed(seed)
@@ -739,30 +773,61 @@ def fit(
     scheduler: Any = None,
     metrics: MetricSpec = None,
     config: TrainConfig | None = None,
+    resume_history: TrainHistory | Mapping[str, Any] | None = None,
 ) -> TrainHistory:
     config = config or TrainConfig()
     device = torch.device(config.device)
     model.to(device)
     resolved_metrics = resolve_metrics(metrics if metrics is not None else config.validation_metrics)
 
-    history = TrainHistory(metrics={name: [] for name in resolved_metrics})
-    history.planned_epochs = config.epochs
+    history = make_train_history(resume_history)
+    for name in resolved_metrics:
+        history.metrics.setdefault(name, [])
+
+    initial_epoch_count = len(history.train_loss)
+    initial_global_step = len(history.step_train_loss)
+    initial_validation_count = len(history.val_loss)
+
+    history.planned_epochs = initial_epoch_count + config.epochs
     if config.steps_per_epoch is not None:
-        history.planned_train_steps = config.epochs * config.steps_per_epoch
+        history.planned_train_steps = initial_global_step + config.epochs * config.steps_per_epoch
     if val_loader is not None:
-        validation_count = sum(
+        new_validation_count = sum(
             1
             for epoch in range(1, config.epochs + 1)
             if epoch % config.val_every == 0
         )
-        history.planned_validations = validation_count
+        history.planned_validations = initial_validation_count + new_validation_count
         if config.val_steps is not None:
-            history.planned_val_steps = validation_count * config.val_steps
-    best_loss = float("inf")
+            history.planned_val_steps = (
+                len(history.step_val_loss) + new_validation_count * config.val_steps
+            )
+    if history.val_loss:
+        best_loss = _best_finite(history.val_loss)
+    elif history.train_loss:
+        best_loss = _best_finite(history.train_loss)
+    else:
+        best_loss = float("inf")
     best_state: dict[str, torch.Tensor] | None = None
+    if config.restore_best and np.isfinite(best_loss):
+        best_state = clean_state_dict(copy.deepcopy(model.state_dict()))
     epochs_without_improvement = 0
-    global_step = 0
-    current_epoch = 0
+    global_step = initial_global_step
+    current_epoch = initial_epoch_count
+    needs_train_step_callback = (
+        (
+            config.save_every_steps is not None
+            and config.save_every_steps > 0
+        )
+        or (
+            config.live_plot_every_steps is not None
+            and config.live_plot_every_steps > 0
+        )
+    )
+    needs_val_step_callback = (
+        config.live_plot_every_steps is not None
+        and config.live_plot_every_steps > 0
+    )
 
     def on_train_step_end(_local_step: int, _loss_value: float) -> None:
         nonlocal global_step
@@ -772,7 +837,12 @@ def fit(
             and config.save_every_steps > 0
             and global_step % config.save_every_steps == 0
         ):
-            path = save_training_checkpoint(
+            checkpoint_dir = Path(config.checkpoint_dir)
+            checkpoint_dir.mkdir(parents=True, exist_ok=True)
+            stem = _checkpoint_stem(model, config)
+            expected_path = checkpoint_dir / f"{stem}_intermediate_step_{global_step:08d}.pt"
+            history.intermediate_checkpoint_paths.append(str(expected_path))
+            save_training_checkpoint(
                 model=model,
                 optimizer=optimizer,
                 history=history,
@@ -782,7 +852,6 @@ def fit(
                 best_loss=best_loss,
                 kind="intermediate",
             )
-            history.intermediate_checkpoint_paths.append(str(path))
 
         if (
             config.live_plot_every_steps is not None
@@ -802,7 +871,7 @@ def fit(
             )
 
     for epoch in range(1, config.epochs + 1):
-        current_epoch = epoch
+        current_epoch = initial_epoch_count + epoch
         train_loss = train_one_epoch(
             model,
             optimizer,
@@ -815,7 +884,7 @@ def fit(
             show_progress=config.show_progress,
             max_steps=config.steps_per_epoch,
             loss_log=history.step_train_loss,
-            on_step_end=on_train_step_end if config.live_plot_every_steps else None,
+            on_step_end=on_train_step_end if needs_train_step_callback else None,
         )
         history.train_loss.append(train_loss)
         history.lr.append(get_lr(optimizer))
@@ -832,7 +901,7 @@ def fit(
                 show_progress=config.show_progress,
                 max_steps=config.val_steps,
                 loss_log=history.step_val_loss,
-                on_step_end=on_val_step_end if config.live_plot_every_steps else None,
+                on_step_end=on_val_step_end if needs_val_step_callback else None,
             )
             history.val_loss.append(val_loss)
             for name, value in val_metrics.items():
@@ -854,7 +923,8 @@ def fit(
         else:
             epochs_without_improvement += 1
 
-        parts = [f"epoch {epoch:03d}/{config.epochs}", f"train={train_loss:.6g}"]
+        total_epochs = history.planned_epochs or (initial_epoch_count + config.epochs)
+        parts = [f"epoch {current_epoch:03d}/{total_epochs}", f"train={train_loss:.6g}"]
         if val_loss is not None:
             parts.append(f"val={val_loss:.6g}")
         parts.append(f"lr={get_lr(optimizer):.3g}")
