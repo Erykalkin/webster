@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import copy
+import re
 import random
+import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, MutableMapping, Mapping, Sequence
@@ -1281,6 +1283,520 @@ def plot_model_prediction_on_channel(
     rmse = torch.sqrt(torch.mean((pred - y) ** 2)).item()
     print(f"{model_label} MAE dB:  {mae:.4f}")
     print(f"{model_label} RMSE dB: {rmse:.4f}")
+
+
+def apply_diploma_plot_style(
+    *,
+    style_dir: str | Path = "style",
+    font_size: int = 12,
+    fig_width_cm: float = 18.0,
+    fig_height_cm: float = 10.0,
+    dpi: int = 140,
+    closed_frame: bool = True,
+    orange: str = "#FF7A00",
+) -> dict[str, str]:
+    if plt is None:
+        raise RuntimeError("matplotlib is not installed")
+
+    style_path = Path(style_dir).resolve()
+    if str(style_path) not in sys.path:
+        sys.path.insert(0, str(style_path))
+
+    import diploma_style as ds
+
+    ds.apply_style(
+        font_size=font_size,
+        fig_width_cm=fig_width_cm,
+        fig_height_cm=fig_height_cm,
+        dpi=dpi,
+        closed_frame=closed_frame,
+    )
+
+    colors = dict(ds.COLORS)
+    colors["orange"] = orange
+    plt.rcParams["axes.prop_cycle"] = plt.cycler(
+        color=[
+            colors["blue"],
+            colors["orange"],
+            colors["green"],
+            colors["red"],
+            colors["purple"],
+            colors["cyan"],
+            colors["pink"],
+        ]
+    )
+    return colors
+
+
+def figure_slug(title: str) -> str:
+    text = str(title).lower()
+    text = re.sub(r"[^0-9a-zа-яё]+", "_", text, flags=re.IGNORECASE)
+    text = re.sub(r"_+", "_", text).strip("_")
+    return text or "figure"
+
+
+def save_figure(
+    fig: Any = None,
+    *,
+    filename_title: str | None = None,
+    output_dir: str | Path = "article/images",
+    dpi: int = 300,
+    hide_titles: bool = False,
+    overwrite: bool = True,
+) -> Path:
+    if plt is None:
+        raise RuntimeError("matplotlib is not installed")
+
+    fig = plt.gcf() if fig is None else fig
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    if filename_title is None:
+        if getattr(fig, "_suptitle", None) is not None and fig._suptitle.get_text().strip():
+            filename_title = fig._suptitle.get_text().strip()
+        else:
+            filename_title = next(
+                (ax.get_title().strip() for ax in fig.axes if ax.get_title().strip()),
+                "figure",
+            )
+
+    if hide_titles:
+        if getattr(fig, "_suptitle", None) is not None:
+            fig._suptitle.set_text("")
+        for ax in fig.axes:
+            ax.set_title("")
+
+    stem = figure_slug(filename_title)
+    path = output_path / f"{stem}.png"
+    if not overwrite:
+        index = 2
+        while path.exists():
+            path = output_path / f"{stem}_{index}.png"
+            index += 1
+
+    fig.savefig(path, dpi=dpi, bbox_inches="tight", facecolor="white")
+    print(f"saved figure: {path}")
+    return path
+
+
+def _iter_model_specs(model_specs: Mapping[str, Mapping[str, Any]] | Sequence[Mapping[str, Any]]):
+    if isinstance(model_specs, Mapping):
+        for label, spec in model_specs.items():
+            merged = dict(spec)
+            merged.setdefault("label", str(label))
+            yield merged
+    else:
+        for spec in model_specs:
+            yield dict(spec)
+
+
+def enabled_model_specs(
+    model_specs: Mapping[str, Mapping[str, Any]] | Sequence[Mapping[str, Any]],
+    *,
+    verbose: bool = True,
+) -> list[dict[str, Any]]:
+    enabled = []
+    for spec in _iter_model_specs(model_specs):
+        label = str(spec.get("label", "model"))
+        if spec.get("checkpoint_name") is None:
+            if verbose:
+                print(f"skip {label}: checkpoint_name is None")
+            continue
+        enabled.append(spec)
+    return enabled
+
+
+def load_models_from_specs(
+    namespace: MutableMapping[str, Any],
+    model_specs: Mapping[str, Mapping[str, Any]] | Sequence[Mapping[str, Any]],
+    *,
+    device: str | torch.device,
+    checkpoint_dir: str | Path = "checkpoints",
+    verbose: bool = True,
+) -> list[tuple[str, nn.Module | None, Any | None, BatchToXY]]:
+    loaded = []
+    for spec in enabled_model_specs(model_specs, verbose=verbose):
+        label = str(spec["label"])
+        model, history = get_or_load_model(
+            namespace,
+            variable_name=str(spec["variable_name"]),
+            checkpoint_name=str(spec["checkpoint_name"]),
+            factory=spec["factory"],
+            history_variable_name=spec.get("history_name"),
+            checkpoint_dir=checkpoint_dir,
+            device=device,
+            verbose=verbose,
+        )
+        loaded.append((label, model, history, spec["batch_to_xy"]))
+    return loaded
+
+
+def compare_forward_models(
+    namespace: MutableMapping[str, Any],
+    model_specs: Mapping[str, Mapping[str, Any]] | Sequence[Mapping[str, Any]],
+    *,
+    batch: Mapping[str, Any] | None = None,
+    loader: torch.utils.data.DataLoader | None = None,
+    seed: int | None = None,
+    target_batch_to_xy: BatchToXY,
+    sample_idx: int = 0,
+    device: str | torch.device | None = None,
+    image_title: str = "Forward model comparison",
+    output_dir: str | Path = "article/images",
+    checkpoint_dir: str | Path = "checkpoints",
+    style: bool = True,
+    save: bool = True,
+    show: bool = True,
+    hide_titles: bool = False,
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    if plt is None:
+        raise RuntimeError("matplotlib is not installed")
+    if batch is None:
+        if loader is None:
+            raise ValueError("Either batch or loader must be provided")
+        if seed is not None:
+            set_seed(seed)
+        batch = validation_preview_batch(loader)
+
+    colors = apply_diploma_plot_style() if style else {"black": "black"}
+    device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
+
+    models = load_models_from_specs(
+        namespace,
+        model_specs,
+        device=device,
+        checkpoint_dir=checkpoint_dir,
+    )
+
+    _, target = target_batch_to_xy(batch, device)
+    target = target.detach().cpu()
+    if sample_idx < 0 or sample_idx >= target.shape[0]:
+        raise IndexError(
+            f"sample_idx={sample_idx} is outside validation batch size {target.shape[0]}"
+        )
+
+    predictions: dict[str, torch.Tensor] = {}
+    metrics: dict[str, dict[str, float]] = {}
+    freq = batch["frequencies_hz"][sample_idx].detach().cpu()
+    y = target[sample_idx]
+
+    for label, model, _, batch_to_xy in models:
+        if model is None:
+            continue
+
+        prediction, _ = predict_on_batch(
+            model,
+            batch_to_xy,
+            batch,
+            device=device,
+        )
+        prediction = prediction.detach().cpu()
+        predictions[label] = prediction
+
+        pred = prediction[sample_idx]
+        mae = torch.mean(torch.abs(pred - y)).item()
+        rmse = torch.sqrt(torch.mean((pred - y) ** 2)).item()
+        metrics[label] = {"mae_db": mae, "rmse_db": rmse}
+        print(f"{label:28s} MAE dB: {mae:8.4f} | RMSE dB: {rmse:8.4f}")
+
+    if not predictions:
+        print("No trained models are available for comparison. Run training cells or add checkpoints.")
+    else:
+        n_plots = len(predictions) + 1
+        n_cols = min(3, n_plots)
+        n_rows = int(np.ceil(n_plots / n_cols))
+        fig, axes = plt.subplots(
+            n_rows,
+            n_cols,
+            figsize=(5.2 * n_cols, 3.6 * n_rows),
+            squeeze=False,
+        )
+        flat_axes = list(axes.ravel())
+
+        plot_batch_geometry(
+            batch,
+            sample_idx,
+            flat_axes[0],
+            title=f"Validation sample {sample_idx}",
+            equal_aspect=False,
+            linewidth=1.8,
+        )
+
+        for ax, (label, prediction) in zip(flat_axes[1:], predictions.items()):
+            pred = prediction[sample_idx]
+            ax.plot(
+                freq,
+                y,
+                label="target dB",
+                linewidth=2.4,
+                color=colors.get("black", "black"),
+            )
+            ax.plot(
+                freq,
+                pred,
+                label=label,
+                linewidth=1.8,
+                color=colors.get("orange", "C1"),
+            )
+            ax.set_xlabel("Frequency, Hz")
+            ax.set_ylabel("Transfer function, dB")
+            ax.set_title(label)
+            ax.grid(True, alpha=0.3)
+            ax.legend(fontsize=8)
+
+        for ax in flat_axes[n_plots:]:
+            ax.axis("off")
+
+        plt.tight_layout()
+
+        if save:
+            save_figure(
+                fig,
+                filename_title=image_title,
+                output_dir=output_dir,
+                hide_titles=hide_titles,
+                overwrite=overwrite,
+            )
+        if show:
+            plt.show()
+        plt.close(fig)
+
+    return {
+        "batch": batch,
+        "target": target,
+        "predictions": predictions,
+        "metrics": metrics,
+    }
+
+
+def compare_training_histories(
+    namespace: MutableMapping[str, Any],
+    model_specs: Mapping[str, Mapping[str, Any]] | Sequence[Mapping[str, Any]],
+    *,
+    image_title: str = "Forward models training history comparison",
+    output_dir: str | Path = "article/images",
+    checkpoint_dir: str | Path = "checkpoints",
+    style: bool = True,
+    save: bool = True,
+    show: bool = True,
+    hide_titles: bool = False,
+    overwrite: bool = True,
+    yscale: str | None = "log",
+    curves: Sequence[str] = ("val", "train"),
+) -> list[tuple[str, Any]]:
+    if plt is None:
+        raise RuntimeError("matplotlib is not installed")
+
+    if style:
+        apply_diploma_plot_style()
+
+    requested_curves = {str(curve).lower() for curve in curves}
+    unknown_curves = requested_curves - {"train", "val"}
+    if unknown_curves:
+        raise ValueError(f"unknown history curve(s): {sorted(unknown_curves)}")
+
+    history_specs = []
+    for spec in enabled_model_specs(model_specs):
+        history = get_or_load_history(
+            namespace,
+            str(spec["history_name"]),
+            str(spec["checkpoint_name"]),
+            checkpoint_dir=checkpoint_dir,
+        )
+        history_specs.append((str(spec["label"]), history))
+
+    print("=== Loaded history lengths ===")
+    for name, history in history_specs:
+        print(
+            f"{name:28s} "
+            f"train={len(history_get(history, 'train_loss')):3d} "
+            f"val={len(history_get(history, 'val_loss')):3d} "
+            f"train_steps={len(history_get(history, 'step_train_loss')):4d} "
+            f"val_steps={len(history_get(history, 'step_val_loss')):4d}"
+        )
+
+    available = [
+        (name, history)
+        for name, history in history_specs
+        if history_get(history, "train_loss") or history_get(history, "val_loss")
+    ]
+
+    if not available:
+        print("No training histories are available. Run training cells or load checkpoints with history.")
+        return []
+
+    fig, ax = plt.subplots(figsize=(11, 5.2))
+    color_cycle = plt.rcParams["axes.prop_cycle"].by_key().get("color", ["C0"])
+    if len(available) > len(color_cycle):
+        color_cycle = [plt.get_cmap("tab20")(i) for i in range(20)]
+    for index, (name, history) in enumerate(available):
+        color = color_cycle[index % len(color_cycle)]
+        val_loss = history_get(history, "val_loss")
+        train_loss = history_get(history, "train_loss")
+        if "val" in requested_curves and val_loss:
+            ax.plot(
+                val_loss,
+                marker="o",
+                linewidth=1.8,
+                color=color,
+                label=f"{name} val",
+            )
+        if "train" in requested_curves and train_loss:
+            ax.plot(
+                train_loss,
+                linestyle="--",
+                linewidth=1.4,
+                alpha=0.65,
+                color=color,
+                label=f"{name} train",
+            )
+
+    ax.set_xlabel("epoch")
+    ax.set_ylabel("loss")
+    if yscale is not None:
+        ax.set_yscale(yscale)
+    ax.set_title("Training history comparison")
+    ax.grid(True, which="both", alpha=0.3)
+    ax.legend(fontsize=8, ncol=2)
+    plt.tight_layout()
+
+    if save:
+        save_figure(
+            fig,
+            filename_title=image_title,
+            output_dir=output_dir,
+            hide_titles=hide_titles,
+            overwrite=overwrite,
+        )
+    if show:
+        plt.show()
+    plt.close(fig)
+
+    print("=== Best losses ===")
+    for name, history in available:
+        val_loss = history_get(history, "val_loss")
+        train_loss = history_get(history, "train_loss")
+        best_train = min(train_loss) if train_loss else None
+        best_val = min(val_loss) if val_loss else None
+        print(f"{name:28s} best train loss: {best_train} | best val loss: {best_val}")
+
+    return available
+
+
+def compare_training_metrics(
+    namespace: MutableMapping[str, Any],
+    model_specs: Mapping[str, Mapping[str, Any]] | Sequence[Mapping[str, Any]],
+    metric_names: Sequence[str] = ("mae", "rmse", "magnitude_mae_db"),
+    *,
+    image_title: str = "Forward models validation metrics",
+    output_dir: str | Path = "article/images",
+    checkpoint_dir: str | Path = "checkpoints",
+    style: bool = True,
+    save: bool = True,
+    show: bool = True,
+    hide_titles: bool = False,
+    overwrite: bool = True,
+    yscale: str | None = None,
+    best_mode: str = "min",
+) -> dict[str, list[dict[str, Any]]]:
+    if plt is None:
+        raise RuntimeError("matplotlib is not installed")
+    if best_mode not in {"min", "max"}:
+        raise ValueError("best_mode must be 'min' or 'max'")
+
+    if style:
+        apply_diploma_plot_style()
+
+    history_specs = []
+    for spec in enabled_model_specs(model_specs):
+        history = get_or_load_history(
+            namespace,
+            str(spec["history_name"]),
+            str(spec["checkpoint_name"]),
+            checkpoint_dir=checkpoint_dir,
+        )
+        history_specs.append((str(spec["label"]), history))
+
+    color_cycle = plt.rcParams["axes.prop_cycle"].by_key().get("color", ["C0"])
+    if len(history_specs) > len(color_cycle):
+        color_cycle = [plt.get_cmap("tab20")(i) for i in range(20)]
+
+    summary: dict[str, list[dict[str, Any]]] = {}
+
+    for metric_name in metric_names:
+        fig, ax = plt.subplots(figsize=(10.5, 4.8))
+        metric_rows: list[dict[str, Any]] = []
+        plotted = False
+
+        for index, (model_name, history) in enumerate(history_specs):
+            metrics = history_to_mapping(history).get("metrics", {}) if history is not None else {}
+            values = metrics.get(metric_name, []) if isinstance(metrics, Mapping) else []
+            xs, ys = _finite_series(values)
+            if not ys:
+                continue
+
+            color = color_cycle[index % len(color_cycle)]
+            xs_one_based = _one_based(xs)
+            ax.plot(
+                xs_one_based,
+                ys,
+                marker="o",
+                linewidth=1.8,
+                color=color,
+                label=model_name,
+            )
+            plotted = True
+
+            best_index = int(np.argmin(ys) if best_mode == "min" else np.argmax(ys))
+            metric_rows.append(
+                {
+                    "model": model_name,
+                    "metric": metric_name,
+                    "best_value": float(ys[best_index]),
+                    "validation": int(xs_one_based[best_index]),
+                }
+            )
+
+        summary[metric_name] = metric_rows
+
+        if not plotted:
+            plt.close(fig)
+            print(f"metric not found or empty for all models: {metric_name}")
+            continue
+
+        ax.set_xlabel("validation")
+        ax.set_ylabel(metric_name)
+        if yscale is not None:
+            ax.set_yscale(yscale)
+        ax.set_title(metric_name)
+        ax.grid(True, which="both", alpha=0.3)
+        ax.legend(fontsize=8)
+        plt.tight_layout()
+
+        if save:
+            save_figure(
+                fig,
+                filename_title=f"{image_title} {metric_name}",
+                output_dir=output_dir,
+                hide_titles=hide_titles,
+                overwrite=overwrite,
+            )
+        if show:
+            plt.show()
+        plt.close(fig)
+
+        print(f"=== Best {metric_name} ({best_mode}) ===")
+        print(f"{'model':28s} | {'best_value':>14s} | {'validation':>10s}")
+        print("-" * 59)
+        for row in sorted(metric_rows, key=lambda item: item["best_value"], reverse=(best_mode == "max")):
+            print(
+                f"{row['model']:28s} | "
+                f"{row['best_value']:14.6g} | "
+                f"{row['validation']:10d}"
+            )
+
+    return summary
 
 
 def plot_single_model_preview(
