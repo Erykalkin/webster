@@ -1255,8 +1255,8 @@ if globals().get("run_finetune", False):
 
     importlib.reload(utils)
 
-    finetune_model_name = "film_deeponet"  # "mlp", "mlp_mse", "fno", "deeponet", "film_deeponet", "bilinear_fusion_deeponet", "attention_fusion_deeponet", "siren_deeponet", "mamba_fusion_deeponet", "mamba_siren_dynamic_deformable_deeponet", "mamba_operator", "dynamic_deeponet", or "deformable_deeponet"
-    finetune_epochs = 50
+    finetune_model_name = "mamba_siren_dynamic_deformable_deeponet"  # "mlp", "mlp_mse", "fno", "deeponet", "film_deeponet", "bilinear_fusion_deeponet", "attention_fusion_deeponet", "siren_deeponet", "mamba_fusion_deeponet", "mamba_siren_dynamic_deformable_deeponet", "mamba_operator", "dynamic_deeponet", or "deformable_deeponet"
+    finetune_epochs = 5
     finetune_steps_per_epoch = steps_per_epoch
     finetune_val_steps = val_steps
     finetune_batch_size = mamba_operator_batch_size if finetune_model_name == "mamba_operator" else batch_size
@@ -1746,6 +1746,7 @@ else:
     print("Fine-tuning skipped")
 
 # %% Cell 36
+run_hole_finetune = True
 if globals().get("run_hole_finetune", False):
     cleanup_training_memory()
 
@@ -1777,14 +1778,16 @@ if globals().get("run_hole_finetune", False):
 
     hole_finetune_train_loader = make_streaming_dataloader(
         hole_finetune_train_config,
-        range_library,
+        hole_library,
         batch_size=hole_finetune_batch_size,
         num_workers=0,
     )
 
+    print("hole_library geometry kinds:", list(hole_library.keys()))
+
     hole_finetune_val_loader = make_streaming_dataloader(
         hole_finetune_val_config,
-        range_library,
+        hole_library,
         batch_size=hole_finetune_batch_size,
         num_workers=0,
     )
@@ -1911,20 +1914,20 @@ mamba_operator_checkpoint_name = None
 mlp_checkpoint_name = "mlp_db"
 fno_checkpoint_name = "fno_db"
 deeponet_checkpoint_name = "deeponet_db"
-# film_deeponet_checkpoint_name = "film_deeponet_db"
-# bilinear_fusion_deeponet_checkpoint_name = "bilinear_fusion_deeponet_db"
-# attention_fusion_deeponet_checkpoint_name = "attention_fusion_deeponet_db"
-# siren_deeponet_checkpoint_name = "siren_deeponet_db"
-# mamba_fusion_deeponet_checkpoint_name = "mamba_fusion_deeponet_db"
-# mamba_siren_dynamic_deformable_deeponet_checkpoint_name = "mamba_siren_dynamic_deformable_deeponet_db"
-# dynamic_deeponet_checkpoint_name = "dynamic_deeponet_new_db"
-# deformable_deeponet_checkpoint_name = "deformable_deeponet_db"
-# mamba_operator_checkpoint_name = "mamba_operator_db"
+film_deeponet_checkpoint_name = "film_deeponet_db"
+bilinear_fusion_deeponet_checkpoint_name = "bilinear_fusion_deeponet_db"
+attention_fusion_deeponet_checkpoint_name = "attention_fusion_deeponet_db"
+siren_deeponet_checkpoint_name = "siren_deeponet_db"
+mamba_fusion_deeponet_checkpoint_name = "mamba_fusion_deeponet_db"
+mamba_siren_dynamic_deformable_deeponet_checkpoint_name = "mamba_siren_dynamic_deformable_deeponet_db"
+dynamic_deeponet_checkpoint_name = "dynamic_deeponet_new_db"
+deformable_deeponet_checkpoint_name = "deformable_deeponet_db"
+mamba_operator_checkpoint_name = "mamba_operator_db"
 
 
 comparison_seed = 100_000
 comparison_sample_idx = 3
-comparison_image_title = "deep Mamba vs Mamba op"
+comparison_image_title = "ALL"
 comparison_batch = validation_preview_batch()
 
 def make_mlp_for_comparison():
@@ -2200,6 +2203,7 @@ model_specs = {
         "history_name": "mamba_siren_dynamic_deformable_deeponet_history",
         "batch_to_xy": deeponet_batch_to_xy,
     },
+
     "Mamba Operator": {
         "variable_name": "mamba_operator",
         "checkpoint_name": mamba_operator_checkpoint_name,
@@ -2234,7 +2238,7 @@ comparison_result = utils.compare_forward_models(
     image_title=comparison_image_title,
     output_dir="article/images",
     style=True,
-    save=True,
+    save=False,
     show=True,
     hide_titles=False,
     overwrite=True,
@@ -2250,7 +2254,7 @@ history_comparison = utils.compare_training_histories(
     image_title="Функции потерь deep Mamba vs Mamba op",
     output_dir="article/images",
     style=True,
-    save=True,
+    save=False,
     show=True,
     hide_titles=True,
     overwrite=True,
@@ -2273,7 +2277,7 @@ metric_comparison = utils.compare_training_metrics(
     image_title="Метрики mlp fno deep",
     output_dir="article/images",
     style=True,
-    save=True,
+    save=False,
     show=True,
     hide_titles=False,
     overwrite=True,
