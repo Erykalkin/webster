@@ -1191,6 +1191,370 @@ class LightweightMambaBlock(nn.Module):
         return x
 
 
+def _mamba2_segsum(values: Tensor) -> Tensor:
+    sequence_length = values.shape[-1]
+    repeated = values.unsqueeze(-1).expand(*values.shape, sequence_length)
+    lower_mask = torch.tril(
+        torch.ones(
+            sequence_length,
+            sequence_length,
+            device=values.device,
+            dtype=torch.bool,
+        ),
+        diagonal=-1,
+    )
+    repeated = repeated.masked_fill(~lower_mask, 0.0)
+    segment_sum = torch.cumsum(repeated, dim=-2)
+    inclusive_mask = torch.tril(
+        torch.ones(
+            sequence_length,
+            sequence_length,
+            device=values.device,
+            dtype=torch.bool,
+        ),
+        diagonal=0,
+    )
+    return segment_sum.masked_fill(~inclusive_mask, -torch.inf)
+
+
+def _mamba2_ssd_minimal_discrete(
+    x: Tensor,
+    a: Tensor,
+    b: Tensor,
+    c: Tensor,
+    *,
+    block_len: int,
+) -> Tensor:
+    """
+    Minimal SSD scan used by Mamba-2.
+
+    Shapes:
+        x: [B, L, H, P]
+        a: [B, L, H]
+        b: [B, L, G, N]
+        c: [B, L, G, N]
+
+    This mirrors the official SSD-minimal algorithm, but is kept local and
+    pure PyTorch so the project does not depend on fused CUDA/Triton kernels.
+    """
+
+    if x.ndim != 4 or a.ndim != 3 or b.ndim != 4 or c.ndim != 4:
+        raise ValueError("invalid SSD tensor ranks")
+    if x.shape[1] % block_len != 0:
+        raise ValueError("sequence length must be divisible by block_len")
+
+    batch_size, sequence_length, n_heads, head_dim = x.shape
+    n_chunks = sequence_length // block_len
+
+    x_chunks = x.reshape(batch_size, n_chunks, block_len, n_heads, head_dim)
+    a_chunks = a.reshape(batch_size, n_chunks, block_len, n_heads)
+    b_chunks = b.reshape(batch_size, n_chunks, block_len, b.shape[2], b.shape[3])
+    c_chunks = c.reshape(batch_size, n_chunks, block_len, c.shape[2], c.shape[3])
+
+    # The current operator uses one group. Expand to heads so the equations are
+    # explicit and easy to audit.
+    if b_chunks.shape[3] == 1:
+        b_heads = b_chunks.expand(batch_size, n_chunks, block_len, n_heads, b_chunks.shape[-1])
+        c_heads = c_chunks.expand(batch_size, n_chunks, block_len, n_heads, c_chunks.shape[-1])
+    elif b_chunks.shape[3] == n_heads:
+        b_heads = b_chunks
+        c_heads = c_chunks
+    else:
+        raise ValueError("SSD group count must be 1 or equal to n_heads")
+
+    # [B, H, C, L]
+    a_by_head = a_chunks.permute(0, 3, 1, 2).contiguous()
+    a_cumsum = torch.cumsum(a_by_head, dim=-1)
+
+    # Intra-chunk outputs.
+    lower_triangular = torch.exp(_mamba2_segsum(a_by_head))
+    y_diag = torch.einsum(
+        "bclhn,bcshn,bhcls,bcshp->bclhp",
+        c_heads,
+        b_heads,
+        lower_triangular,
+        x_chunks,
+    )
+
+    # Chunk states.
+    decay_states = torch.exp(a_cumsum[:, :, :, -1:] - a_cumsum)
+    states = torch.einsum(
+        "bclhn,bhcl,bclhp->bchpn",
+        b_heads,
+        decay_states,
+        x_chunks,
+    )
+
+    initial_states = torch.zeros_like(states[:, :1])
+    states_with_initial = torch.cat([initial_states, states], dim=1)
+    padded_chunk_end = torch.nn.functional.pad(a_cumsum[:, :, :, -1], (1, 0))
+    decay_chunk = torch.exp(_mamba2_segsum(padded_chunk_end))
+    propagated_states = torch.einsum(
+        "bhzc,bchpn->bzhpn",
+        decay_chunk,
+        states_with_initial,
+    )
+    states = propagated_states[:, :-1]
+
+    # State-to-output conversion.
+    state_decay_out = torch.exp(a_cumsum)
+    y_off = torch.einsum(
+        "bclhn,bchpn,bhcl->bclhp",
+        c_heads,
+        states,
+        state_decay_out,
+    )
+
+    return (y_diag + y_off).reshape(batch_size, sequence_length, n_heads, head_dim)
+
+
+class MinimalMamba2Layer(nn.Module):
+    """
+    Pure PyTorch Mamba-2/SSD layer with [B, L, D] input/output.
+
+    It follows the official Mamba2Simple structure: projection into z/x/B/C/dt,
+    depthwise causal convolution, SSD scan, skip D, gate, normalization, and
+    output projection. The fused CUDA/Triton kernels are intentionally avoided.
+    """
+
+    def __init__(
+        self,
+        d_model: int = 128,
+        d_state: int = 64,
+        d_conv: int = 4,
+        expand: int = 2,
+        headdim: int = 64,
+        ngroups: int = 1,
+        chunk_size: int = 64,
+        dropout: float = 0.0,
+        dt_min: float = 1e-3,
+        dt_max: float = 1e-1,
+        dt_init_floor: float = 1e-4,
+        a_init_range: tuple[float, float] = (1.0, 16.0),
+    ) -> None:
+        super().__init__()
+
+        if d_model < 1:
+            raise ValueError("d_model must be >= 1")
+        if d_state < 1:
+            raise ValueError("d_state must be >= 1")
+        if d_conv < 1:
+            raise ValueError("d_conv must be >= 1")
+        if expand < 1:
+            raise ValueError("expand must be >= 1")
+        if headdim < 1:
+            raise ValueError("headdim must be >= 1")
+        if chunk_size < 1:
+            raise ValueError("chunk_size must be >= 1")
+
+        self.d_model = d_model
+        self.d_state = d_state
+        self.d_conv = d_conv
+        self.expand = expand
+        self.d_inner = d_model * expand
+        self.headdim = headdim
+        self.ngroups = ngroups
+        self.chunk_size = chunk_size
+
+        if self.d_inner % headdim != 0:
+            raise ValueError("expand * d_model must be divisible by headdim")
+        self.nheads = self.d_inner // headdim
+        if ngroups not in (1, self.nheads):
+            raise ValueError("ngroups must be 1 or equal to nheads")
+
+        self.norm_in = nn.LayerNorm(d_model)
+
+        projection_dim = (
+            2 * self.d_inner
+            + 2 * ngroups * d_state
+            + self.nheads
+        )
+        self.in_proj = nn.Linear(d_model, projection_dim, bias=False)
+
+        conv_dim = self.d_inner + 2 * ngroups * d_state
+        self.conv1d = nn.Conv1d(
+            conv_dim,
+            conv_dim,
+            kernel_size=d_conv,
+            groups=conv_dim,
+            padding=d_conv - 1,
+        )
+
+        dt = torch.exp(
+            torch.rand(self.nheads) * (math.log(dt_max) - math.log(dt_min))
+            + math.log(dt_min)
+        ).clamp_min(dt_init_floor)
+        inverse_dt = dt + torch.log(-torch.expm1(-dt))
+        self.dt_bias = nn.Parameter(inverse_dt)
+
+        a = torch.empty(self.nheads).uniform_(*a_init_range)
+        self.a_log = nn.Parameter(torch.log(a))
+        self.d_skip = nn.Parameter(torch.ones(self.nheads))
+
+        self.norm_out = nn.LayerNorm(self.d_inner)
+        self.out_proj = nn.Linear(self.d_inner, d_model, bias=False)
+        self.dropout = nn.Dropout(dropout)
+
+    def _pad_to_chunk(self, values: Tensor) -> tuple[Tensor, int]:
+        sequence_length = values.shape[1]
+        remainder = sequence_length % self.chunk_size
+        if remainder == 0:
+            return values, sequence_length
+
+        pad_length = self.chunk_size - remainder
+        padding = values[:, -1:, :].expand(values.shape[0], pad_length, values.shape[2])
+        return torch.cat([values, padding], dim=1), sequence_length
+
+    def forward(self, x: Tensor) -> Tensor:
+        if x.ndim != 3:
+            raise ValueError(
+                "x must have shape [B, L, D], "
+                f"got {tuple(x.shape)}"
+            )
+        if x.shape[-1] != self.d_model:
+            raise ValueError(f"Expected d_model={self.d_model}, got {x.shape[-1]}")
+
+        residual = x
+        x = self.norm_in(x)
+        x, original_length = self._pad_to_chunk(x)
+        batch_size, sequence_length, _ = x.shape
+
+        projected = self.in_proj(x)
+        z, xbc, dt = torch.split(
+            projected,
+            [
+                self.d_inner,
+                self.d_inner + 2 * self.ngroups * self.d_state,
+                self.nheads,
+            ],
+            dim=-1,
+        )
+
+        xbc = self.conv1d(xbc.transpose(1, 2)).transpose(1, 2)
+        xbc = torch.nn.functional.silu(xbc[:, :sequence_length, :])
+
+        x_ssm, b, c = torch.split(
+            xbc,
+            [
+                self.d_inner,
+                self.ngroups * self.d_state,
+                self.ngroups * self.d_state,
+            ],
+            dim=-1,
+        )
+
+        dt = torch.nn.functional.softplus(dt + self.dt_bias.view(1, 1, -1))
+        a = -torch.exp(self.a_log).view(1, 1, self.nheads) * dt
+
+        x_heads = x_ssm.reshape(
+            batch_size,
+            sequence_length,
+            self.nheads,
+            self.headdim,
+        )
+        b = b.reshape(batch_size, sequence_length, self.ngroups, self.d_state)
+        c = c.reshape(batch_size, sequence_length, self.ngroups, self.d_state)
+
+        y = _mamba2_ssd_minimal_discrete(
+            x_heads * dt.unsqueeze(-1),
+            a,
+            b,
+            c,
+            block_len=self.chunk_size,
+        )
+        y = y + x_heads * self.d_skip.view(1, 1, self.nheads, 1)
+        y = y.reshape(batch_size, sequence_length, self.d_inner)
+        y = y * torch.nn.functional.silu(z)
+        y = self.out_proj(self.norm_out(y))
+        y = y[:, :original_length, :]
+
+        return residual + self.dropout(y)
+
+
+class MinimalMamba2Block(nn.Module):
+    def __init__(
+        self,
+        d_model: int = 128,
+        depth: int = 2,
+        d_state: int = 64,
+        d_conv: int = 4,
+        expand: int = 2,
+        headdim: int = 64,
+        chunk_size: int = 64,
+        dropout: float = 0.0,
+    ) -> None:
+        super().__init__()
+        if depth < 1:
+            raise ValueError("depth must be >= 1")
+
+        self.layers = nn.Sequential(
+            *[
+                MinimalMamba2Layer(
+                    d_model=d_model,
+                    d_state=d_state,
+                    d_conv=d_conv,
+                    expand=expand,
+                    headdim=headdim,
+                    chunk_size=chunk_size,
+                    dropout=dropout,
+                )
+                for _ in range(depth)
+            ]
+        )
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.layers(x)
+
+
+class ExternalMamba2Block(nn.Module):
+    """
+    Thin wrapper around mamba-ssm's Mamba2Simple.
+
+    Use this only in environments where mamba-ssm is installed and its CUDA /
+    Triton kernels are healthy. The local MinimalMamba2Block is the portable
+    default for this project.
+    """
+
+    def __init__(
+        self,
+        d_model: int = 128,
+        depth: int = 2,
+        d_state: int = 64,
+        d_conv: int = 4,
+        expand: int = 2,
+        headdim: int = 64,
+        chunk_size: int = 64,
+        use_mem_eff_path: bool = False,
+    ) -> None:
+        super().__init__()
+
+        try:
+            from mamba_ssm.modules.mamba2_simple import Mamba2Simple
+        except Exception as exc:  # pragma: no cover - optional dependency
+            raise ImportError(
+                "mamba_ssm is not available. Use mamba_backend='minimal_mamba2' "
+                "or install a working mamba-ssm environment."
+            ) from exc
+
+        self.layers = nn.Sequential(
+            *[
+                Mamba2Simple(
+                    d_model=d_model,
+                    d_state=d_state,
+                    d_conv=d_conv,
+                    expand=expand,
+                    headdim=headdim,
+                    chunk_size=chunk_size,
+                    use_mem_eff_path=use_mem_eff_path,
+                )
+                for _ in range(depth)
+            ]
+        )
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.layers(x.contiguous())
+
+
 class FrequencyConditionedMambaOperator(nn.Module):
     """
     Frequency-conditioned bidirectional sequence operator over the tube axis.
@@ -1357,9 +1721,14 @@ class TransferFunctionMambaOperator(nn.Module):
         hidden_channels: int | None = None,
         frequency_bands: int = 16,
         frequency_hidden_dim: int | None = None,
+        mamba_backend: str = "minimal_mamba2",
         mamba_depth: int = 2,
         mamba_expansion: int = 2,
         mamba_kernel_size: int = 9,
+        mamba_d_state: int = 64,
+        mamba_headdim: int = 64,
+        mamba_chunk_size: int = 64,
+        mamba_use_mem_eff_path: bool = False,
         dropout: float = 0.0,
         out_channels: int = 1,
         frequency_chunk_size: int | None = 32,
@@ -1379,20 +1748,48 @@ class TransferFunctionMambaOperator(nn.Module):
             frequency_bands=frequency_bands,
             hidden_dim=frequency_hidden_dim,
         )
-        mamba_forward = LightweightMambaBlock(
-            d_model=d_model,
-            depth=mamba_depth,
-            expansion=mamba_expansion,
-            kernel_size=mamba_kernel_size,
-            dropout=dropout,
-        )
-        mamba_backward = LightweightMambaBlock(
-            d_model=d_model,
-            depth=mamba_depth,
-            expansion=mamba_expansion,
-            kernel_size=mamba_kernel_size,
-            dropout=dropout,
-        )
+
+        def make_mamba_block() -> nn.Module:
+            if mamba_backend == "minimal_mamba2":
+                return MinimalMamba2Block(
+                    d_model=d_model,
+                    depth=mamba_depth,
+                    d_state=mamba_d_state,
+                    d_conv=mamba_kernel_size,
+                    expand=mamba_expansion,
+                    headdim=mamba_headdim,
+                    chunk_size=mamba_chunk_size,
+                    dropout=dropout,
+                )
+
+            if mamba_backend == "external_mamba2":
+                return ExternalMamba2Block(
+                    d_model=d_model,
+                    depth=mamba_depth,
+                    d_state=mamba_d_state,
+                    d_conv=mamba_kernel_size,
+                    expand=mamba_expansion,
+                    headdim=mamba_headdim,
+                    chunk_size=mamba_chunk_size,
+                    use_mem_eff_path=mamba_use_mem_eff_path,
+                )
+
+            if mamba_backend == "lightweight":
+                return LightweightMambaBlock(
+                    d_model=d_model,
+                    depth=mamba_depth,
+                    expansion=mamba_expansion,
+                    kernel_size=mamba_kernel_size,
+                    dropout=dropout,
+                )
+
+            raise ValueError(
+                "mamba_backend must be 'minimal_mamba2', "
+                "'external_mamba2', or 'lightweight'"
+            )
+
+        mamba_forward = make_mamba_block()
+        mamba_backward = make_mamba_block()
 
         self.operator = FrequencyConditionedMambaOperator(
             geometry_encoder=geometry_encoder,

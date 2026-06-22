@@ -28,4 +28,4 @@ def make_random_smooth_tube(L=1000.0, dx=0.1,
 
     l = np.full(n_nodes - 1, dx, dtype=float)
 
-    return x_nodes, S, l
+    return x_nodes, S, ld
