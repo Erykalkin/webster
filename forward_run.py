@@ -877,10 +877,10 @@ mamba_siren_dynamic_deformable_deeponet_checkpoint_name = "mamba_siren_dynamic_d
 
 # Set any donor checkpoint to None to initialize that block from scratch.
 # You can pass either checkpoint stems or full .pt paths.
-warm_start_mamba_fusion_checkpoint = None  # "mamba_fusion_deeponet_db"
-warm_start_siren_checkpoint = None  # "siren_deeponet_db"
-warm_start_dynamic_checkpoint = None  # "dynamic_deeponet_new_db"
-warm_start_deformable_checkpoint = None  # "deformable_deeponet_db"
+warm_start_mamba_fusion_checkpoint = "mamba_fusion_deeponet_db"  # "mamba_fusion_deeponet_db"
+warm_start_siren_checkpoint = "siren_deeponet_db"  # "siren_deeponet_db"
+warm_start_dynamic_checkpoint = "dynamic_deeponet_new_db"  # "dynamic_deeponet_new_db"
+warm_start_deformable_checkpoint = "deformable_deeponet_db"  # "deformable_deeponet_db"
 
 mamba_siren_dynamic_deformable_deeponet = TransferFunctionMambaSIRENDynamicDeformableDeepONet(
     in_channels=1,
@@ -1234,12 +1234,14 @@ utils.plot_single_model_preview(
 
 # %% Cell 34
 run_finetune = False
+run_hole_finetune = False
 run_unexpected_geometry_check = False
 run_scaling_check = False
 run_geometry_sensitivity_check = False
 run_frequency_grid_check = False
 
 print("fine-tuning enabled:", run_finetune)
+print("hole fine-tuning enabled:", run_hole_finetune)
 print("optional diagnostics enabled:", {
     "unexpected_geometry": run_unexpected_geometry_check,
     "scaling": run_scaling_check,
@@ -1744,6 +1746,150 @@ else:
     print("Fine-tuning skipped")
 
 # %% Cell 36
+if globals().get("run_hole_finetune", False):
+    cleanup_training_memory()
+
+    hole_finetune_checkpoint_name = "mamba_siren_dynamic_deformable_deeponet_hole_db"
+    source_checkpoint_name = "mamba_siren_dynamic_deformable_deeponet_db"
+    source_checkpoint_path = Path("checkpoints") / f"{source_checkpoint_name}_best.pt"
+
+    hole_finetune_epochs = 50
+    hole_finetune_steps_per_epoch = steps_per_epoch
+    hole_finetune_val_steps = val_steps
+    hole_finetune_batch_size = batch_size
+    hole_finetune_live_plot_every_steps = live_plot_every_steps
+    hole_finetune_save_every_steps = None
+
+    hole_finetune_train_config = StreamingGeometryDatasetConfig(
+        geometry_kind="tube_with_hole",
+        solver_config=solver_config,
+        target_mode="db",
+        seed=3_000_000,
+    )
+
+    hole_finetune_val_config = StreamingGeometryDatasetConfig(
+        geometry_kind="tube_with_hole",
+        solver_config=solver_config,
+        target_mode="db",
+        seed=4_000_000,
+        max_samples=hole_finetune_batch_size * hole_finetune_val_steps,
+    )
+
+    hole_finetune_train_loader = make_streaming_dataloader(
+        hole_finetune_train_config,
+        range_library,
+        batch_size=hole_finetune_batch_size,
+        num_workers=0,
+    )
+
+    hole_finetune_val_loader = make_streaming_dataloader(
+        hole_finetune_val_config,
+        range_library,
+        batch_size=hole_finetune_batch_size,
+        num_workers=0,
+    )
+
+    mamba_siren_dynamic_deformable_deeponet = TransferFunctionMambaSIRENDynamicDeformableDeepONet(
+        in_channels=1,
+        hidden_channels=64,
+        basis_dim=128,
+        pooling_bins=16,
+        trunk_hidden_dim=128,
+        trunk_hidden_layers=3,
+        first_omega_0=10.0,
+        hidden_omega_0=10.0,
+        out_channels=1,
+        n_experts=4,
+        routing_hidden_dim=32,
+        temperature=1.0,
+        max_offset=2.0,
+        offset_hidden_channels=32,
+        mamba_backend="minimal_mamba2",
+        mamba_depth=1,
+        mamba_expansion=2,
+        mamba_kernel_size=4,
+        mamba_d_state=32,
+        mamba_headdim=32,
+        mamba_chunk_size=64,
+        dropout=0.0,
+        residual_dot=True,
+        warm_start_verbose=False,
+    ).to(device)
+
+    if source_checkpoint_path.exists():
+        source_checkpoint = torch.load(
+            source_checkpoint_path,
+            map_location=device,
+            weights_only=False,
+        )
+        utils.load_model_state(
+            mamba_siren_dynamic_deformable_deeponet,
+            utils.checkpoint_state_dict(source_checkpoint),
+            strict=True,
+        )
+        resume_history = source_checkpoint.get("history") if isinstance(source_checkpoint, dict) else None
+        print("loaded source checkpoint:", source_checkpoint_path)
+    else:
+        resume_history = None
+        print("source checkpoint not found, training from scratch:", source_checkpoint_path)
+
+    hole_finetune_optimizer = utils.make_optimizer(
+        mamba_siren_dynamic_deformable_deeponet,
+        lr=2e-4,
+        weight_decay=1e-4,
+    )
+
+    hole_finetune_scheduler = utils.make_plateau_scheduler(
+        hole_finetune_optimizer,
+        factor=0.5,
+        patience=3,
+        min_lr=1e-7,
+    )
+
+    hole_finetune_history = utils.fit(
+        mamba_siren_dynamic_deformable_deeponet,
+        hole_finetune_optimizer,
+        hole_finetune_train_loader,
+        hole_finetune_val_loader,
+        scheduler=hole_finetune_scheduler,
+        criterion=criterion,
+        batch_to_xy=deeponet_batch_to_xy,
+        config=utils.TrainConfig(
+            epochs=hole_finetune_epochs,
+            steps_per_epoch=hole_finetune_steps_per_epoch,
+            val_steps=hole_finetune_val_steps,
+            device=device,
+            show_progress=False,
+            live_plot_every_steps=hole_finetune_live_plot_every_steps,
+            grad_clip_norm=None,
+            checkpoint_name=hole_finetune_checkpoint_name,
+            save_every_steps=hole_finetune_save_every_steps,
+            validation_metrics=validation_metrics,
+            scheduler_on="val_loss",
+        ),
+        resume_history=resume_history,
+    )
+
+    mamba_siren_dynamic_deformable_deeponet_hole_history = hole_finetune_history
+    utils.plot_history(hole_finetune_history)
+
+    utils.plot_single_model_preview(
+        mamba_siren_dynamic_deformable_deeponet,
+        deeponet_batch_to_xy,
+        "Mamba SIREN Dynamic Deformable DeepONet, hole fine-tuned",
+        loader=hole_finetune_val_loader,
+        device=device,
+        sample_idx=preview_sample_idx,
+    )
+
+    print(
+        "best hole checkpoint:",
+        Path("checkpoints") / f"{hole_finetune_checkpoint_name}_best.pt",
+    )
+else:
+    print("Hole fine-tuning skipped")
+
+# %% Cell 37
 # Set any checkpoint name to None to remove this model from comparison.
 
 mlp_mse_checkpoint_name = None
@@ -1762,18 +1908,18 @@ mamba_operator_checkpoint_name = None
 
 
 # mlp_mse_checkpoint_name = "mlp_mse_db"
-# mlp_checkpoint_name = "mlp_db"
-# fno_checkpoint_name = "fno_db"
-# deeponet_checkpoint_name = "deeponet_db"
+mlp_checkpoint_name = "mlp_db"
+fno_checkpoint_name = "fno_db"
+deeponet_checkpoint_name = "deeponet_db"
 # film_deeponet_checkpoint_name = "film_deeponet_db"
 # bilinear_fusion_deeponet_checkpoint_name = "bilinear_fusion_deeponet_db"
 # attention_fusion_deeponet_checkpoint_name = "attention_fusion_deeponet_db"
 # siren_deeponet_checkpoint_name = "siren_deeponet_db"
-mamba_fusion_deeponet_checkpoint_name = "mamba_fusion_deeponet_db"
-mamba_siren_dynamic_deformable_deeponet_checkpoint_name = "mamba_siren_dynamic_deformable_deeponet_db"
+# mamba_fusion_deeponet_checkpoint_name = "mamba_fusion_deeponet_db"
+# mamba_siren_dynamic_deformable_deeponet_checkpoint_name = "mamba_siren_dynamic_deformable_deeponet_db"
 # dynamic_deeponet_checkpoint_name = "dynamic_deeponet_new_db"
 # deformable_deeponet_checkpoint_name = "deformable_deeponet_db"
-mamba_operator_checkpoint_name = "mamba_operator_db"
+# mamba_operator_checkpoint_name = "mamba_operator_db"
 
 
 comparison_seed = 100_000
@@ -2097,7 +2243,7 @@ comparison_result = utils.compare_forward_models(
 predictions = comparison_result["predictions"]
 target = comparison_result["target"]
 
-# %% Cell 37
+# %% Cell 38
 history_comparison = utils.compare_training_histories(
     globals(),
     model_specs,
@@ -2112,7 +2258,7 @@ history_comparison = utils.compare_training_histories(
     curves=("val", "train"),
 )
 
-# %% Cell 38
+# %% Cell 39
 top_metric_names = [
     "mae",
     "dominant_peak_level_mae_db",
@@ -2135,7 +2281,7 @@ metric_comparison = utils.compare_training_metrics(
     best_mode="min",
 )
 
-# %% Cell 39
+# %% Cell 40
 if globals().get("run_unexpected_geometry_check", False):
     mlp_mse_checkpoint_name = globals().get("mlp_mse_checkpoint_name", "mlp_mse_db")
     # Cell 12: unexpected geometry check
@@ -2311,7 +2457,7 @@ if globals().get("run_unexpected_geometry_check", False):
 else:
     print("Unexpected geometry check skipped")
 
-# %% Cell 40
+# %% Cell 41
 if globals().get("run_scaling_check", False):
     import numpy as np
     import torch
@@ -2494,7 +2640,7 @@ if globals().get("run_scaling_check", False):
 else:
     print("Scaling check skipped")
 
-# %% Cell 41
+# %% Cell 42
 if globals().get("run_geometry_sensitivity_check", False):
     import torch
 
@@ -2548,7 +2694,7 @@ if globals().get("run_geometry_sensitivity_check", False):
 else:
     print("Geometry sensitivity check skipped")
 
-# %% Cell 42
+# %% Cell 43
 if globals().get("run_frequency_grid_check", False):
     import numpy as np
     import matplotlib.pyplot as plt
