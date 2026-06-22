@@ -8,7 +8,9 @@ from torch import Tensor, nn
 
 
 ProfileFn = Callable[[Tensor], Tensor]
-PreprocessFn = Callable[[Tensor], Tensor]
+ModelInputs = Tensor | tuple[Tensor, ...]
+PreprocessFn = Callable[[Tensor], ModelInputs]
+ForwardFn = Callable[[nn.Module, ModelInputs, Tensor], Tensor]
 LossFn = Callable[[Tensor, Tensor], Tensor]
 
 
@@ -33,6 +35,7 @@ def metropolis_inverse(
     transfer_loss_fn: LossFn,
     *,
     area_preprocess_fn: PreprocessFn | None = None,
+    forward_fn: ForwardFn | None = None,
     n_steps: int = 50_000,
     burn_in: int = 10_000,
     thinning: int = 10,
@@ -72,6 +75,13 @@ def metropolis_inverse(
         area_preprocess_fn:
             Тот же preprocessing площади, который применялся
             при обучении прямой модели.
+
+        forward_fn:
+            Универсальный вызов модели:
+                model, model_inputs, frequency_input -> prediction.
+
+            Если None, используется операторный формат:
+                model(area_input, frequency_input).
 
         temperature:
             Масштаб распределения.
@@ -120,6 +130,14 @@ def metropolis_inverse(
         if area_preprocess_fn is not None
         else lambda area: area
     )
+    forward = (
+        forward_fn
+        if forward_fn is not None
+        else lambda model, model_inputs, frequency: model(
+            model_inputs,
+            frequency,
+        )
+    )
 
     previous_training_state = model.training
     model.eval()
@@ -130,7 +148,8 @@ def metropolis_inverse(
         area_physical = profile_fn(parameters)
         area_model_input = preprocess(area_physical)
 
-        prediction = model(
+        prediction = forward(
+            model,
             area_model_input,
             frequency_input,
         )
@@ -142,81 +161,82 @@ def metropolis_inverse(
 
         return loss, area_physical, prediction
 
-    current_loss, current_area, current_prediction = evaluate(
-        current_parameters
-    )
-
-    best_loss = float(current_loss)
-    best_parameters = current_parameters.clone()
-    best_area = current_area.clone()
-    best_prediction = current_prediction.clone()
-
-    stored_samples: list[Tensor] = []
-    stored_losses: list[Tensor] = []
-
-    accepted = 0
-
-    for step in range(n_steps):
-        proposal = (
+    try:
+        current_loss, current_area, current_prediction = evaluate(
             current_parameters
-            + proposal_std
-            * torch.randn_like(current_parameters)
         )
 
-        proposal_loss, proposal_area, proposal_prediction = evaluate(
-            proposal
-        )
+        best_loss = float(current_loss)
+        best_parameters = current_parameters.clone()
+        best_area = current_area.clone()
+        best_prediction = current_prediction.clone()
 
-        # Не нормированная логарифмическая апостериорная вероятность:
-        #
-        # log p(q | H) = -loss / temperature + const
-        current_log_probability = (
-            -current_loss / temperature
-        )
+        stored_samples: list[Tensor] = []
+        stored_losses: list[Tensor] = []
 
-        proposal_log_probability = (
-            -proposal_loss / temperature
-        )
+        accepted = 0
 
-        log_acceptance_ratio = (
-            proposal_log_probability
-            - current_log_probability
-        )
-
-        log_uniform = torch.log(
-            torch.rand(
-                (),
-                device=device,
-                dtype=dtype,
+        for step in range(n_steps):
+            proposal = (
+                current_parameters
+                + proposal_std
+                * torch.randn_like(current_parameters)
             )
-        )
 
-        if log_uniform < torch.minimum(
-            torch.zeros_like(log_acceptance_ratio),
-            log_acceptance_ratio,
-        ):
-            current_parameters = proposal
-            current_loss = proposal_loss
-            current_area = proposal_area
-            current_prediction = proposal_prediction
-            accepted += 1
+            proposal_loss, proposal_area, proposal_prediction = evaluate(
+                proposal
+            )
 
-        if float(current_loss) < best_loss:
-            best_loss = float(current_loss)
-            best_parameters = current_parameters.clone()
-            best_area = current_area.clone()
-            best_prediction = current_prediction.clone()
+            # Не нормированная логарифмическая апостериорная вероятность:
+            #
+            # log p(q | H) = -loss / temperature + const
+            current_log_probability = (
+                -current_loss / temperature
+            )
 
-        if step >= burn_in:
-            if (step - burn_in) % thinning == 0:
-                stored_samples.append(
-                    current_parameters.cpu().clone()
+            proposal_log_probability = (
+                -proposal_loss / temperature
+            )
+
+            log_acceptance_ratio = (
+                proposal_log_probability
+                - current_log_probability
+            )
+
+            log_uniform = torch.log(
+                torch.rand(
+                    (),
+                    device=device,
+                    dtype=dtype,
                 )
-                stored_losses.append(
-                    current_loss.cpu().clone()
-                )
+            )
 
-    model.train(previous_training_state)
+            if log_uniform < torch.minimum(
+                torch.zeros_like(log_acceptance_ratio),
+                log_acceptance_ratio,
+            ):
+                current_parameters = proposal
+                current_loss = proposal_loss
+                current_area = proposal_area
+                current_prediction = proposal_prediction
+                accepted += 1
+
+            if float(current_loss) < best_loss:
+                best_loss = float(current_loss)
+                best_parameters = current_parameters.clone()
+                best_area = current_area.clone()
+                best_prediction = current_prediction.clone()
+
+            if step >= burn_in:
+                if (step - burn_in) % thinning == 0:
+                    stored_samples.append(
+                        current_parameters.cpu().clone()
+                    )
+                    stored_losses.append(
+                        current_loss.cpu().clone()
+                    )
+    finally:
+        model.train(previous_training_state)
 
     if not stored_samples:
         raise RuntimeError(
@@ -236,4 +256,74 @@ def metropolis_inverse(
         best_area=best_area,
         best_prediction=best_prediction,
         best_loss=best_loss,
+    )
+
+
+def metropolis_inverse_for_project_model(
+    model: nn.Module,
+    target: Tensor,
+    frequencies_hz: Tensor,
+    initial_parameters: Tensor,
+    profile_fn: ProfileFn,
+    transfer_loss_fn: LossFn,
+    *,
+    model_kind: str = "operator",
+    log_area: bool = True,
+    include_x: bool = True,
+    f_min_hz: float | None = None,
+    f_max_hz: float | None = None,
+    n_steps: int = 50_000,
+    burn_in: int = 10_000,
+    thinning: int = 10,
+    proposal_std: float = 0.05,
+    temperature: float = 1.0,
+) -> MetropolisResult:
+    """
+    Convenience wrapper for project models.
+
+    model_kind="operator" supports FNO/DeepONet/Mamba-like models:
+        model(area, kappa)
+
+    model_kind="mlp" supports ProfileMLP:
+        model(profile)
+    """
+
+    from models.back_base import (
+        make_area_preprocess_fn,
+        make_forward_fn,
+        make_kappa,
+    )
+
+    try:
+        model_parameter = next(model.parameters())
+        device = model_parameter.device
+        dtype = model_parameter.dtype
+    except StopIteration:
+        device = target.device
+        dtype = target.dtype
+
+    kappa = make_kappa(
+        frequencies_hz.to(device=device, dtype=dtype),
+        f_min_hz=f_min_hz,
+        f_max_hz=f_max_hz,
+    )
+
+    return metropolis_inverse(
+        model=model,
+        target=target,
+        frequency_input=kappa,
+        initial_parameters=initial_parameters,
+        profile_fn=profile_fn,
+        transfer_loss_fn=transfer_loss_fn,
+        area_preprocess_fn=make_area_preprocess_fn(
+            model_kind,
+            log_area=log_area,
+            include_x=include_x,
+        ),
+        forward_fn=make_forward_fn(model_kind),
+        n_steps=n_steps,
+        burn_in=burn_in,
+        thinning=thinning,
+        proposal_std=proposal_std,
+        temperature=temperature,
     )
