@@ -744,6 +744,28 @@ DEFAULT_VALIDATION_METRICS: dict[str, MetricFn] = {
 }
 
 
+METRIC_LABELS_RU: dict[str, str] = {
+    "mae": "MAE, дБ",
+    "rmse": "RMSE, дБ",
+    "mse": "MSE",
+    "rel_l2": "относительная L2-ошибка",
+    "magnitude_mae_db": "MAE амплитуды, дБ",
+    "magnitude_rmse_db": "RMSE амплитуды, дБ",
+    "magnitude_max_abs_error_db": "максимальная ошибка амплитуды, дБ",
+    "relative_derivative_l2": "относительная ошибка производной",
+    "dominant_peak_frequency_mae_hz": "ошибка частоты главного пика, Гц",
+    "dominant_peak_level_mae_db": "ошибка уровня главного пика, дБ",
+    "dominant_notch_frequency_mae_hz": "ошибка частоты главного провала, Гц",
+    "dominant_notch_level_mae_db": "ошибка уровня главного провала, дБ",
+    "relative_complex_l2_percent": "относительная комплексная L2-ошибка, %",
+    "phase_mae_degrees": "MAE фазы, градусы",
+}
+
+
+def metric_label(name: str) -> str:
+    return METRIC_LABELS_RU.get(str(name), str(name))
+
+
 def resolve_metrics(metrics: MetricSpec) -> dict[str, MetricFn]:
     if metrics is None:
         return dict(DEFAULT_VALIDATION_METRICS)
@@ -1214,7 +1236,7 @@ def plot_batch_geometry(
     sample_idx: int,
     ax: Any = None,
     *,
-    title: str = "Channel geometry",
+    title: str = "Профиль канала",
     mode: str = "symmetric",
     equal_aspect: bool = False,
     linewidth: float = 1.5,
@@ -1265,13 +1287,13 @@ def plot_model_prediction_on_channel(
         batch,
         sample_idx,
         axes[0],
-        title=f"Validation sample {sample_idx}",
+        title=f"Профиль канала {sample_idx}",
     )
 
-    axes[1].plot(freq, y, label="target dB", linewidth=2.0, color="black")
+    axes[1].plot(freq, y, label="численное решение, дБ", linewidth=2.0, color="black")
     axes[1].plot(freq, pred, label=model_label, linewidth=1.8)
-    axes[1].set_xlabel("Frequency, Hz")
-    axes[1].set_ylabel("Transfer function, dB")
+    axes[1].set_xlabel("частота, Гц")
+    axes[1].set_ylabel("передаточная функция, дБ")
     axes[1].set_title(model_label)
     axes[1].grid(True, alpha=0.3)
     axes[1].legend()
@@ -1503,7 +1525,29 @@ def compare_forward_models(
     if not predictions:
         print("No trained models are available for comparison. Run training cells or add checkpoints.")
     else:
-        n_plots = len(predictions) + 1
+        fig_geom, ax_geom = plt.subplots(figsize=(7.0, 4.0))
+        plot_batch_geometry(
+            batch,
+            sample_idx,
+            ax_geom,
+            title=f"Профиль канала {sample_idx}",
+            equal_aspect=False,
+            linewidth=1.8,
+        )
+        plt.tight_layout()
+        if save:
+            save_figure(
+                fig_geom,
+                filename_title=f"{image_title} geometry",
+                output_dir=output_dir,
+                hide_titles=hide_titles,
+                overwrite=overwrite,
+            )
+        if show:
+            plt.show()
+        plt.close(fig_geom)
+
+        n_plots = len(predictions)
         n_cols = min(3, n_plots)
         n_rows = int(np.ceil(n_plots / n_cols))
         fig, axes = plt.subplots(
@@ -1514,21 +1558,12 @@ def compare_forward_models(
         )
         flat_axes = list(axes.ravel())
 
-        plot_batch_geometry(
-            batch,
-            sample_idx,
-            flat_axes[0],
-            title=f"Validation sample {sample_idx}",
-            equal_aspect=False,
-            linewidth=1.8,
-        )
-
-        for ax, (label, prediction) in zip(flat_axes[1:], predictions.items()):
+        for ax, (label, prediction) in zip(flat_axes, predictions.items()):
             pred = prediction[sample_idx]
             ax.plot(
                 freq,
                 y,
-                label="target dB",
+                label="численное решение, дБ",
                 linewidth=2.4,
                 color=colors.get("black", "black"),
             )
@@ -1539,13 +1574,13 @@ def compare_forward_models(
                 linewidth=1.8,
                 color=colors.get("orange", "C1"),
             )
-            ax.set_xlabel("Frequency, Hz")
-            ax.set_ylabel("Transfer function, dB")
+            ax.set_xlabel("частота, Гц")
+            ax.set_ylabel("передаточная функция, дБ")
             ax.set_title(label)
             ax.grid(True, alpha=0.3)
             ax.legend(fontsize=8)
 
-        for ax in flat_axes[n_plots:]:
+        for ax in flat_axes[len(predictions):]:
             ax.axis("off")
 
         plt.tight_layout()
@@ -1638,6 +1673,7 @@ def compare_training_histories(
             ax.plot(
                 val_loss,
                 marker="o",
+                markersize=3.5,
                 linewidth=1.8,
                 color=color,
                 label=f"{name} val",
@@ -1652,11 +1688,11 @@ def compare_training_histories(
                 label=f"{name} train",
             )
 
-    ax.set_xlabel("epoch")
-    ax.set_ylabel("loss")
+    ax.set_xlabel("эпоха")
+    ax.set_ylabel("функция потерь")
     if yscale is not None:
         ax.set_yscale(yscale)
-    ax.set_title("Training history comparison")
+    ax.set_title("Сравнение истории обучения")
     ax.grid(True, which="both", alpha=0.3)
     ax.legend(fontsize=8, ncol=2)
     plt.tight_layout()
@@ -1699,6 +1735,7 @@ def compare_training_metrics(
     overwrite: bool = True,
     yscale: str | None = None,
     best_mode: str = "min",
+    n_cols: int = 2,
 ) -> dict[str, list[dict[str, Any]]]:
     if plt is None:
         raise RuntimeError("matplotlib is not installed")
@@ -1707,6 +1744,11 @@ def compare_training_metrics(
 
     if style:
         apply_diploma_plot_style()
+
+    metric_names = list(metric_names)
+    if not metric_names:
+        print("metric_names is empty")
+        return {}
 
     history_specs = []
     for spec in enabled_model_specs(model_specs):
@@ -1722,10 +1764,21 @@ def compare_training_metrics(
     if len(history_specs) > len(color_cycle):
         color_cycle = [plt.get_cmap("tab20")(i) for i in range(20)]
 
+    n_cols = max(1, min(int(n_cols), len(metric_names)))
+    n_rows = int(np.ceil(len(metric_names) / n_cols))
+    fig, axes = plt.subplots(
+        n_rows,
+        n_cols,
+        figsize=(6.2 * n_cols, 4.4 * n_rows),
+        squeeze=False,
+    )
+    flat_axes = list(axes.ravel())
+
     summary: dict[str, list[dict[str, Any]]] = {}
 
-    for metric_name in metric_names:
-        fig, ax = plt.subplots(figsize=(10.5, 4.8))
+    for metric_index, metric_name in enumerate(metric_names):
+        display_metric_name = metric_label(metric_name)
+        ax = flat_axes[metric_index]
         metric_rows: list[dict[str, Any]] = []
         plotted = False
 
@@ -1742,6 +1795,7 @@ def compare_training_metrics(
                 xs_one_based,
                 ys,
                 marker="o",
+                markersize=3.5,
                 linewidth=1.8,
                 color=color,
                 label=model_name,
@@ -1760,34 +1814,61 @@ def compare_training_metrics(
 
         summary[metric_name] = metric_rows
 
-        if not plotted:
-            plt.close(fig)
-            print(f"metric not found or empty for all models: {metric_name}")
-            continue
-
-        ax.set_xlabel("validation")
-        ax.set_ylabel(metric_name)
+        ax.set_xlabel("валидация")
+        ax.set_ylabel(display_metric_name)
         if yscale is not None:
             ax.set_yscale(yscale)
-        ax.set_title(metric_name)
+        ax.set_title(display_metric_name)
         ax.grid(True, which="both", alpha=0.3)
-        ax.legend(fontsize=8)
-        plt.tight_layout()
 
-        if save:
-            save_figure(
-                fig,
-                filename_title=f"{image_title} {metric_name}",
-                output_dir=output_dir,
-                hide_titles=hide_titles,
-                overwrite=overwrite,
+        if not plotted:
+            ax.text(
+                0.5,
+                0.5,
+                "нет данных",
+                transform=ax.transAxes,
+                ha="center",
+                va="center",
             )
-        if show:
-            plt.show()
-        plt.close(fig)
+            print(f"метрика не найдена или пуста для всех моделей: {metric_name}")
 
-        print(f"=== Best {metric_name} ({best_mode}) ===")
-        print(f"{'model':28s} | {'best_value':>14s} | {'validation':>10s}")
+    for ax in flat_axes[len(metric_names):]:
+        ax.axis("off")
+
+    handles, labels = flat_axes[0].get_legend_handles_labels()
+    if handles:
+        fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.88))
+        fig.legend(
+            handles,
+            labels,
+            loc="upper center",
+            ncol=min(4, len(labels)),
+            fontsize=8,
+            frameon=True,
+        )
+    else:
+        fig.tight_layout()
+
+    if save:
+        save_figure(
+            fig,
+            filename_title=image_title,
+            output_dir=output_dir,
+            hide_titles=hide_titles,
+            overwrite=overwrite,
+        )
+    if show:
+        plt.show()
+    plt.close(fig)
+
+    for metric_name in metric_names:
+        display_metric_name = metric_label(metric_name)
+        metric_rows = summary.get(metric_name, [])
+        if not metric_rows:
+            continue
+
+        print(f"=== Лучшие значения {display_metric_name} ({best_mode}) ===")
+        print(f"{'модель':28s} | {'лучшее значение':>16s} | {'валидация':>10s}")
         print("-" * 59)
         for row in sorted(metric_rows, key=lambda item: item["best_value"], reverse=(best_mode == "max")):
             print(
@@ -1992,7 +2073,7 @@ def plot_history(
         if planned_train_steps is not None or planned_val_steps is not None:
             planned_step_count = max(int(planned_train_steps or 0), int(planned_val_steps or 0))
         _set_planned_xlim(ax, planned_step_count, all_step_xs)
-        ax.set_title("loss per batch")
+        ax.set_title("loss по батчам")
         ax.set_xlabel("optimizer step")
         ax.grid(True)
         ax.legend()
@@ -2012,8 +2093,8 @@ def plot_history(
             all_epoch_xs.extend(xs)
             ax.plot(xs, ys, ".-", label="val epoch")
         _set_planned_xlim(ax, planned_epochs, all_epoch_xs)
-        ax.set_title("mean loss")
-        ax.set_xlabel("epoch")
+        ax.set_title("средний loss")
+        ax.set_xlabel("эпоха")
         ax.grid(True)
         ax.legend()
         axis_idx += 1
@@ -2030,10 +2111,10 @@ def plot_history(
                 all_metric_xs.extend(xs)
                 ax.plot(xs, ys, ".-", label=name)
         _set_planned_xlim(ax, planned_validations, all_metric_xs)
-        ax.set_title("metrics / first value" if normalize_metrics else "metrics")
-        ax.set_xlabel("validation")
+        ax.set_title("метрики / первое значение" if normalize_metrics else "метрики")
+        ax.set_xlabel("валидация")
         if normalize_metrics:
-            ax.set_ylabel("relative to first value")
+            ax.set_ylabel("относительно первого значения")
         ax.grid(True)
         ax.legend()
 
@@ -2045,8 +2126,8 @@ def plot_selected_metrics(
     history: TrainHistory | Mapping[str, Any] | None,
     metric_names: Sequence[str],
     *,
-    title: str = "Selected validation metrics",
-    xlabel: str = "validation",
+    title: str = "Выбранные метрики валидации",
+    xlabel: str = "валидация",
     figsize: tuple[float, float] = (10, 4),
     normalize: bool = False,
 ) -> None:
@@ -2075,7 +2156,7 @@ def plot_selected_metrics(
 
         if normalize:
             ys = _normalize_to_first(ys)
-        ax.plot(_one_based(xs), ys, ".-", label=name)
+        ax.plot(_one_based(xs), ys, ".-", label=metric_label(name))
         plotted = True
 
     if not plotted:
@@ -2086,7 +2167,7 @@ def plot_selected_metrics(
 
     ax.set_title(title)
     ax.set_xlabel(xlabel)
-    ax.set_ylabel("relative to first value" if normalize else "metric value")
+    ax.set_ylabel("относительно первого значения" if normalize else "значение метрики")
     ax.grid(True, alpha=0.3)
     ax.legend()
     fig.tight_layout()
