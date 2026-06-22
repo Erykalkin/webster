@@ -1,11 +1,8 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# ### Parametres
-
-# In[ ]:
+# Generated from forward.ipynb code cells.
+# Edit forward.ipynb first, then regenerate this file if needed.
 
 
+# %% Cell 1
 from functools import partial
 from pathlib import Path
 import importlib
@@ -50,16 +47,14 @@ from models.deep import (
     TransferFunctionAttentionFusionDeepONet,
     TransferFunctionSIRENDeepONet,
     TransferFunctionMambaFusionDeepONet,
+    TransferFunctionMambaSIRENDynamicDeformableDeepONet,
     TransferFunctionMambaOperator,
     TransferFunctionDynamicDeepONet,
     TransferFunctionDeformableDeepONet,
     webster_deeponet_batch_to_xy,
 )
 
-
-# In[ ]:
-
-
+# %% Cell 2
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 batch_size = 32
@@ -132,10 +127,7 @@ val_config = StreamingGeometryDatasetConfig(
 
 print("device:", device)
 
-
-# In[ ]:
-
-
+# %% Cell 3
 train_loader = make_streaming_dataloader(
     train_config,
     range_library,
@@ -150,10 +142,7 @@ val_loader = make_streaming_dataloader(
     num_workers=0,
 )
 
-
-# In[ ]:
-
-
+# %% Cell 4
 mlp_batch_to_xy = partial(
     webster_mlp_batch_to_xy,
     n_points=n_profile_points,
@@ -175,10 +164,7 @@ deeponet_batch_to_xy = partial(
     frequency_max_hz=solver_config.f_max_hz,
 )
 
-
-# In[ ]:
-
-
+# %% Cell 5
 # Validation metrics are often the slowest part of training.
 # Use "fast" for training, "spectral" for peak/shape monitoring, "full" for diagnostics.
 validation_metric_preset = "full"  # "fast", "spectral", "full", or "none"
@@ -240,10 +226,7 @@ print("validation metric preset:", validation_metric_preset)
 print("validation metrics:", validation_metrics)
 
 
-
-# In[ ]:
-
-
+# %% Cell 6
 validation_preview_batch = lambda: utils.validation_preview_batch(val_loader)
 predict_on_batch = lambda model, batch_to_xy, batch: utils.predict_on_batch(
     model,
@@ -286,12 +269,7 @@ def cleanup_training_memory(*, keep_model_names=()):
 
 
 
-
-# ### MLP
-
-# In[ ]:
-
-
+# %% Cell 7
 cleanup_training_memory()
 
 print("=== Training MLP ===")
@@ -349,12 +327,7 @@ utils.plot_history(mlp_history)
 
 
 
-
-# #### Проверка MLP на одном канале
-
-# In[ ]:
-
-
+# %% Cell 8
 utils.plot_single_model_preview(
     mlp,
     mlp_batch_to_xy,
@@ -364,13 +337,7 @@ utils.plot_single_model_preview(
     sample_idx=preview_sample_idx,
 )
 
-
-# ### MLP MSE baseline
-# 
-
-# In[ ]:
-
-
+# %% Cell 9
 cleanup_training_memory()
 
 print("=== Training MLP MSE baseline ===")
@@ -424,13 +391,7 @@ mlp_mse_history = utils.fit(
 
 utils.plot_history(mlp_mse_history)
 
-
-# #### Проверка MLP MSE baseline на одном канале
-# 
-
-# In[ ]:
-
-
+# %% Cell 10
 utils.plot_single_model_preview(
     mlp_mse,
     mlp_batch_to_xy,
@@ -440,12 +401,7 @@ utils.plot_single_model_preview(
     sample_idx=preview_sample_idx,
 )
 
-
-# ### FNO
-
-# In[ ]:
-
-
+# %% Cell 11
 cleanup_training_memory()
 
 print("=== Training FNO ===")
@@ -502,12 +458,7 @@ utils.plot_history(fno_history)
 
 
 
-
-# #### Проверка FNO на одном канале
-
-# In[ ]:
-
-
+# %% Cell 12
 utils.plot_single_model_preview(
     fno,
     fno_batch_to_xy,
@@ -517,12 +468,7 @@ utils.plot_single_model_preview(
     sample_idx=preview_sample_idx,
 )
 
-
-# ### DeepONet
-
-# In[ ]:
-
-
+# %% Cell 13
 cleanup_training_memory()
 
 print("=== Training DeepONet ===")
@@ -576,12 +522,7 @@ deeponet_history = utils.fit(
 
 utils.plot_history(deeponet_history)
 
-
-# #### Проверка DeepONet на одном канале
-
-# In[ ]:
-
-
+# %% Cell 14
 utils.plot_single_model_preview(
     deeponet,
     deeponet_batch_to_xy,
@@ -591,13 +532,7 @@ utils.plot_single_model_preview(
     sample_idx=10,
 )
 
-
-# ### FiLM DeepONet
-# 
-
-# In[ ]:
-
-
+# %% Cell 15
 cleanup_training_memory()
 
 print("=== Training FiLM DeepONet ===")
@@ -651,13 +586,7 @@ film_deeponet_history = utils.fit(
 
 utils.plot_history(film_deeponet_history)
 
-
-# #### Проверка FiLM DeepONet на одном канале
-# 
-
-# In[ ]:
-
-
+# %% Cell 16
 utils.plot_single_model_preview(
     film_deeponet,
     deeponet_batch_to_xy,
@@ -667,13 +596,7 @@ utils.plot_single_model_preview(
     sample_idx=preview_sample_idx,
 )
 
-
-# ### Bilinear Fusion DeepONet
-# 
-
-# In[ ]:
-
-
+# %% Cell 17
 cleanup_training_memory()
 
 print("=== Training Bilinear Fusion DeepONet ===")
@@ -729,13 +652,7 @@ bilinear_fusion_deeponet_history = utils.fit(
 
 utils.plot_history(bilinear_fusion_deeponet_history)
 
-
-# #### Проверка Bilinear Fusion DeepONet на одном канале
-# 
-
-# In[ ]:
-
-
+# %% Cell 18
 utils.plot_single_model_preview(
     bilinear_fusion_deeponet,
     deeponet_batch_to_xy,
@@ -745,13 +662,7 @@ utils.plot_single_model_preview(
     sample_idx=preview_sample_idx,
 )
 
-
-# ### Attention Fusion DeepONet
-# 
-
-# In[ ]:
-
-
+# %% Cell 19
 cleanup_training_memory()
 
 print("=== Training Attention Fusion DeepONet ===")
@@ -809,13 +720,7 @@ attention_fusion_deeponet_history = utils.fit(
 
 utils.plot_history(attention_fusion_deeponet_history)
 
-
-# #### Проверка Attention Fusion DeepONet на одном канале
-# 
-
-# In[ ]:
-
-
+# %% Cell 20
 utils.plot_single_model_preview(
     attention_fusion_deeponet,
     deeponet_batch_to_xy,
@@ -825,13 +730,7 @@ utils.plot_single_model_preview(
     sample_idx=preview_sample_idx,
 )
 
-
-# ### SIREN DeepONet
-# 
-
-# In[ ]:
-
-
+# %% Cell 21
 cleanup_training_memory()
 
 print("=== Training SIREN DeepONet ===")
@@ -887,13 +786,7 @@ siren_deeponet_history = utils.fit(
 
 utils.plot_history(siren_deeponet_history)
 
-
-# #### Проверка SIREN DeepONet на одном канале
-# 
-
-# In[ ]:
-
-
+# %% Cell 22
 utils.plot_single_model_preview(
     siren_deeponet,
     deeponet_batch_to_xy,
@@ -903,13 +796,7 @@ utils.plot_single_model_preview(
     sample_idx=preview_sample_idx,
 )
 
-
-# ### Mamba Fusion DeepONet
-# 
-
-# In[ ]:
-
-
+# %% Cell 23
 cleanup_training_memory()
 
 print("=== Training Mamba Fusion DeepONet ===")
@@ -972,13 +859,7 @@ mamba_fusion_deeponet_history = utils.fit(
 
 utils.plot_history(mamba_fusion_deeponet_history)
 
-
-# #### Проверка Mamba Fusion DeepONet на одном канале
-# 
-
-# In[ ]:
-
-
+# %% Cell 24
 utils.plot_single_model_preview(
     mamba_fusion_deeponet,
     deeponet_batch_to_xy,
@@ -988,13 +869,101 @@ utils.plot_single_model_preview(
     sample_idx=preview_sample_idx,
 )
 
+# %% Cell 25
+cleanup_training_memory()
 
-# ### Mamba Operator
-# 
+print("=== Training Mamba SIREN Dynamic Deformable DeepONet ===")
+mamba_siren_dynamic_deformable_deeponet_checkpoint_name = "mamba_siren_dynamic_deformable_deeponet_db"
 
-# In[ ]:
+# Set any donor checkpoint to None to initialize that block from scratch.
+# You can pass either checkpoint stems or full .pt paths.
+warm_start_mamba_fusion_checkpoint = None  # "mamba_fusion_deeponet_db"
+warm_start_siren_checkpoint = None  # "siren_deeponet_db"
+warm_start_dynamic_checkpoint = None  # "dynamic_deeponet_new_db"
+warm_start_deformable_checkpoint = None  # "deformable_deeponet_db"
 
+mamba_siren_dynamic_deformable_deeponet = TransferFunctionMambaSIRENDynamicDeformableDeepONet(
+    in_channels=1,
+    hidden_channels=64,
+    basis_dim=128,
+    pooling_bins=16,
+    trunk_hidden_dim=128,
+    trunk_hidden_layers=3,
+    first_omega_0=10.0,
+    hidden_omega_0=10.0,
+    out_channels=1,
+    n_experts=4,
+    routing_hidden_dim=32,
+    temperature=1.0,
+    max_offset=2.0,
+    offset_hidden_channels=32,
+    mamba_backend="minimal_mamba2",
+    mamba_depth=1,
+    mamba_expansion=2,
+    mamba_kernel_size=4,
+    mamba_d_state=32,
+    mamba_headdim=32,
+    mamba_chunk_size=64,
+    dropout=0.0,
+    residual_dot=True,
+    warm_start_mamba_fusion_checkpoint=warm_start_mamba_fusion_checkpoint,
+    warm_start_siren_checkpoint=warm_start_siren_checkpoint,
+    warm_start_dynamic_checkpoint=warm_start_dynamic_checkpoint,
+    warm_start_deformable_checkpoint=warm_start_deformable_checkpoint,
+    warm_start_checkpoint_dir="checkpoints",
+    warm_start_map_location="cpu",
+    warm_start_verbose=True,
+).to(device)
 
+mamba_siren_dynamic_deformable_deeponet_optimizer = utils.make_optimizer(
+    mamba_siren_dynamic_deformable_deeponet,
+    lr=5e-4,
+    weight_decay=1e-4,
+)
+
+mamba_siren_dynamic_deformable_deeponet_scheduler = utils.make_plateau_scheduler(
+    mamba_siren_dynamic_deformable_deeponet_optimizer,
+    factor=0.5,
+    patience=3,
+    min_lr=1e-6,
+)
+
+mamba_siren_dynamic_deformable_deeponet_history = utils.fit(
+    mamba_siren_dynamic_deformable_deeponet,
+    mamba_siren_dynamic_deformable_deeponet_optimizer,
+    train_loader,
+    val_loader,
+    scheduler=mamba_siren_dynamic_deformable_deeponet_scheduler,
+    criterion=criterion,
+    batch_to_xy=deeponet_batch_to_xy,
+    config=utils.TrainConfig(
+        epochs=epochs,
+        steps_per_epoch=steps_per_epoch,
+        val_steps=val_steps,
+        device=device,
+        show_progress=False,
+        live_plot_every_steps=live_plot_every_steps,
+        grad_clip_norm=None,
+        checkpoint_name=mamba_siren_dynamic_deformable_deeponet_checkpoint_name,
+        save_every_steps=None,
+        validation_metrics=validation_metrics,
+        scheduler_on="val_loss",
+    ),
+)
+
+utils.plot_history(mamba_siren_dynamic_deformable_deeponet_history)
+
+# %% Cell 26
+utils.plot_single_model_preview(
+    mamba_siren_dynamic_deformable_deeponet,
+    deeponet_batch_to_xy,
+    "Mamba SIREN Dynamic Deformable DeepONet",
+    loader=val_loader,
+    device=device,
+    sample_idx=preview_sample_idx,
+)
+
+# %% Cell 27
 cleanup_training_memory()
 
 print("=== Training Mamba Operator ===")
@@ -1079,13 +1048,7 @@ mamba_operator_history = utils.fit(
 
 utils.plot_history(mamba_operator_history)
 
-
-# #### Проверка Mamba Operator на одном канале
-# 
-
-# In[ ]:
-
-
+# %% Cell 28
 utils.plot_single_model_preview(
     mamba_operator,
     deeponet_batch_to_xy,
@@ -1095,13 +1058,7 @@ utils.plot_single_model_preview(
     sample_idx=preview_sample_idx,
 )
 
-
-# ### Dynamic DeepONet
-# 
-
-# In[ ]:
-
-
+# %% Cell 29
 cleanup_training_memory()
 
 print("=== Training Dynamic DeepONet ===")
@@ -1158,10 +1115,7 @@ dynamic_deeponet_history = utils.fit(
 
 utils.plot_history(dynamic_deeponet_history)
 
-
-# In[ ]:
-
-
+# %% Cell 30
 # Plot selected validation metrics from a saved checkpoint
 
 metrics_checkpoint_name = "dynamic_deeponet_new_db"
@@ -1192,13 +1146,7 @@ utils.plot_selected_metrics(
     normalize=metrics_normalize,
 )
 
-
-# #### Проверка Dynamic DeepONet на одном канале
-# 
-
-# In[ ]:
-
-
+# %% Cell 31
 utils.plot_single_model_preview(
     dynamic_deeponet,
     deeponet_batch_to_xy,
@@ -1216,13 +1164,7 @@ utils.plot_single_model_preview(
     sample_idx=3,
 )
 
-
-# ### Deformable DeepONet
-# 
-
-# In[ ]:
-
-
+# %% Cell 32
 cleanup_training_memory()
 
 print("=== Training Deformable DeepONet ===")
@@ -1280,13 +1222,7 @@ utils.plot_history(deformable_deeponet_history)
 
 
 
-
-# #### Проверка Deformable DeepONet на одном канале
-# 
-
-# In[ ]:
-
-
+# %% Cell 33
 utils.plot_single_model_preview(
     deformable_deeponet,
     deeponet_batch_to_xy,
@@ -1296,10 +1232,7 @@ utils.plot_single_model_preview(
     sample_idx=preview_sample_idx,
 )
 
-
-# In[ ]:
-
-
+# %% Cell 34
 run_finetune = False
 run_unexpected_geometry_check = False
 run_scaling_check = False
@@ -1314,19 +1247,13 @@ print("optional diagnostics enabled:", {
     "frequency_grid": run_frequency_grid_check,
 })
 
-
-# ### Дообучение
-# 
-
-# In[ ]:
-
-
-if run_finetune:
+# %% Cell 35
+if globals().get("run_finetune", False):
     cleanup_training_memory()
 
     importlib.reload(utils)
 
-    finetune_model_name = "film_deeponet"  # "mlp", "mlp_mse", "fno", "deeponet", "film_deeponet", "bilinear_fusion_deeponet", "attention_fusion_deeponet", "siren_deeponet", "mamba_fusion_deeponet", "mamba_operator", "dynamic_deeponet", or "deformable_deeponet"
+    finetune_model_name = "film_deeponet"  # "mlp", "mlp_mse", "fno", "deeponet", "film_deeponet", "bilinear_fusion_deeponet", "attention_fusion_deeponet", "siren_deeponet", "mamba_fusion_deeponet", "mamba_siren_dynamic_deformable_deeponet", "mamba_operator", "dynamic_deeponet", or "deformable_deeponet"
     finetune_epochs = 50
     finetune_steps_per_epoch = steps_per_epoch
     finetune_val_steps = val_steps
@@ -1348,6 +1275,7 @@ if run_finetune:
     bilinear_fusion_deeponet_checkpoint_name = "bilinear_fusion_deeponet_db"
     attention_fusion_deeponet_checkpoint_name = "attention_fusion_deeponet_db"
     mamba_fusion_deeponet_checkpoint_name = "mamba_fusion_deeponet_db"
+    mamba_siren_dynamic_deformable_deeponet_checkpoint_name = "mamba_siren_dynamic_deformable_deeponet_db"
     mamba_operator_checkpoint_name = "mamba_operator_db"
 
     active_library_kinds = [name for name in range_library.keys() if name != "random"]
@@ -1508,6 +1436,34 @@ if run_finetune:
         )
 
 
+    def make_mamba_siren_dynamic_deformable_deeponet_for_finetune():
+        return TransferFunctionMambaSIRENDynamicDeformableDeepONet(
+            in_channels=1,
+            hidden_channels=64,
+            basis_dim=128,
+            pooling_bins=16,
+            trunk_hidden_dim=128,
+            trunk_hidden_layers=3,
+            first_omega_0=10.0,
+            hidden_omega_0=10.0,
+            out_channels=1,
+            n_experts=4,
+            routing_hidden_dim=32,
+            temperature=1.0,
+            max_offset=2.0,
+            offset_hidden_channels=32,
+            mamba_backend="minimal_mamba2",
+            mamba_depth=1,
+            mamba_expansion=2,
+            mamba_kernel_size=4,
+            mamba_d_state=32,
+            mamba_headdim=32,
+            mamba_chunk_size=64,
+            dropout=0.0,
+            residual_dot=True,
+        )
+
+
     def make_mamba_operator_for_finetune():
         return TransferFunctionMambaOperator(
             in_channels=1,
@@ -1649,6 +1605,17 @@ if run_finetune:
             "weight_decay": 1e-4,
             "label": "Mamba Fusion DeepONet",
         },
+
+        "mamba_siren_dynamic_deformable_deeponet": {
+            "variable_name": "mamba_siren_dynamic_deformable_deeponet",
+            "history_name": "mamba_siren_dynamic_deformable_deeponet_history",
+            "checkpoint_name": mamba_siren_dynamic_deformable_deeponet_checkpoint_name,
+            "factory": make_mamba_siren_dynamic_deformable_deeponet_for_finetune,
+            "batch_to_xy": deeponet_batch_to_xy,
+            "base_lr": 5e-4,
+            "weight_decay": 1e-4,
+            "label": "Mamba SIREN Dynamic Deformable DeepONet",
+        },
         "mamba_operator": {
             "variable_name": "mamba_operator",
             "history_name": "mamba_operator_history",
@@ -1776,29 +1743,43 @@ if run_finetune:
 else:
     print("Fine-tuning skipped")
 
+# %% Cell 36
+# Set any checkpoint name to None to remove this model from comparison.
 
-# ### Сравнение
+mlp_mse_checkpoint_name = None
+mlp_checkpoint_name = None
+fno_checkpoint_name = None
+deeponet_checkpoint_name = None
+film_deeponet_checkpoint_name = None
+bilinear_fusion_deeponet_checkpoint_name = None
+attention_fusion_deeponet_checkpoint_name = None
+siren_deeponet_checkpoint_name = None
+mamba_fusion_deeponet_checkpoint_name = None
+mamba_siren_dynamic_deformable_deeponet_checkpoint_name = None
+dynamic_deeponet_checkpoint_name = None
+deformable_deeponet_checkpoint_name = None
+mamba_operator_checkpoint_name = None
 
-# In[ ]:
 
-
-mlp_checkpoint_name = "mlp_db"
-mlp_mse_checkpoint_name = "mlp_mse_db"
-fno_checkpoint_name = "fno_db"
-deeponet_checkpoint_name = "deeponet_db"
-siren_deeponet_checkpoint_name = "siren_deeponet_db"
-film_deeponet_checkpoint_name = "film_deeponet_db"
-bilinear_fusion_deeponet_checkpoint_name = "bilinear_fusion_deeponet_db"
-attention_fusion_deeponet_checkpoint_name = "attention_fusion_deeponet_db"
+# mlp_mse_checkpoint_name = "mlp_mse_db"
+# mlp_checkpoint_name = "mlp_db"
+# fno_checkpoint_name = "fno_db"
+# deeponet_checkpoint_name = "deeponet_db"
+# film_deeponet_checkpoint_name = "film_deeponet_db"
+# bilinear_fusion_deeponet_checkpoint_name = "bilinear_fusion_deeponet_db"
+# attention_fusion_deeponet_checkpoint_name = "attention_fusion_deeponet_db"
+# siren_deeponet_checkpoint_name = "siren_deeponet_db"
 mamba_fusion_deeponet_checkpoint_name = "mamba_fusion_deeponet_db"
+mamba_siren_dynamic_deformable_deeponet_checkpoint_name = "mamba_siren_dynamic_deformable_deeponet_db"
+# dynamic_deeponet_checkpoint_name = "dynamic_deeponet_new_db"
+# deformable_deeponet_checkpoint_name = "deformable_deeponet_db"
 mamba_operator_checkpoint_name = "mamba_operator_db"
-dynamic_deeponet_checkpoint_name = "dynamic_deeponet_new_db"
-deformable_deeponet_checkpoint_name = "deformable_deeponet_db"
 
-comparison_sample_idx = 11
+
+comparison_seed = 100_000
+comparison_sample_idx = 3
+comparison_image_title = "deep Mamba vs Mamba op"
 comparison_batch = validation_preview_batch()
-
-
 
 def make_mlp_for_comparison():
     return ProfileMLP(
@@ -1879,7 +1860,6 @@ def make_attention_fusion_deeponet_for_comparison():
         hidden_channels=64,
         basis_dim=128,
         pooling_bins=16,
-        frequency_bands=16,
         trunk_hidden_dim=128,
         attention_dim=64,
         memory_tokens=8,
@@ -1912,6 +1892,34 @@ def make_mamba_fusion_deeponet_for_comparison():
         frequency_bands=16,
         trunk_hidden_dim=128,
         out_channels=1,
+        mamba_backend="minimal_mamba2",
+        mamba_depth=1,
+        mamba_expansion=2,
+        mamba_kernel_size=4,
+        mamba_d_state=32,
+        mamba_headdim=32,
+        mamba_chunk_size=64,
+        dropout=0.0,
+        residual_dot=True,
+    )
+
+
+def make_mamba_siren_dynamic_deformable_deeponet_for_comparison():
+    return TransferFunctionMambaSIRENDynamicDeformableDeepONet(
+        in_channels=1,
+        hidden_channels=64,
+        basis_dim=128,
+        pooling_bins=16,
+        trunk_hidden_dim=128,
+        trunk_hidden_layers=3,
+        first_omega_0=10.0,
+        hidden_omega_0=10.0,
+        out_channels=1,
+        n_experts=4,
+        routing_hidden_dim=32,
+        temperature=1.0,
+        max_offset=2.0,
+        offset_hidden_channels=32,
         mamba_backend="minimal_mamba2",
         mamba_depth=1,
         mamba_expansion=2,
@@ -1973,230 +1981,162 @@ def make_deformable_deeponet_for_comparison():
     )
 
 
-model_specs = [
-    (
-        "MLP",
-        "mlp",
-        mlp_checkpoint_name,
-        make_mlp_for_comparison,
-        "mlp_history",
-        mlp_batch_to_xy,
-    ),
-    (
-        "MLP MSE",
-        "mlp_mse",
-        mlp_mse_checkpoint_name,
-        make_mlp_mse_for_comparison,
-        "mlp_mse_history",
-        mlp_batch_to_xy,
-    ),
-    (
-        "FNO",
-        "fno",
-        fno_checkpoint_name,
-        make_fno_for_comparison,
-        "fno_history",
-        fno_batch_to_xy,
-    ),
-    (
-        "DeepONet",
-        "deeponet",
-        deeponet_checkpoint_name,
-        make_deeponet_for_comparison,
-        "deeponet_history",
-        deeponet_batch_to_xy,
-    ),
-    (
-        "FiLM DeepONet",
-        "film_deeponet",
-        film_deeponet_checkpoint_name,
-        make_film_deeponet_for_comparison,
-        "film_deeponet_history",
-        deeponet_batch_to_xy,
-    ),
-    (
-        "Bilinear Fusion DeepONet",
-        "bilinear_fusion_deeponet",
-        bilinear_fusion_deeponet_checkpoint_name,
-        make_bilinear_fusion_deeponet_for_comparison,
-        "bilinear_fusion_deeponet_history",
-        deeponet_batch_to_xy,
-    ),
-    (
-        "Attention Fusion DeepONet",
-        "attention_fusion_deeponet",
-        attention_fusion_deeponet_checkpoint_name,
-        make_attention_fusion_deeponet_for_comparison,
-        "attention_fusion_deeponet_history",
-        deeponet_batch_to_xy,
-    ),
-    (
-        "SIREN DeepONet",
-        "siren_deeponet",
-        siren_deeponet_checkpoint_name,
-        make_siren_deeponet_for_comparison,
-        "siren_deeponet_history",
-        deeponet_batch_to_xy,
-    ),
-    (
-        "Mamba Fusion DeepONet",
-        "mamba_fusion_deeponet",
-        mamba_fusion_deeponet_checkpoint_name,
-        make_mamba_fusion_deeponet_for_comparison,
-        "mamba_fusion_deeponet_history",
-        deeponet_batch_to_xy,
-    ),
-    (
-        "Mamba Operator",
-        "mamba_operator",
-        mamba_operator_checkpoint_name,
-        make_mamba_operator_for_comparison,
-        "mamba_operator_history",
-        deeponet_batch_to_xy,
-    ),
-    (
-        "Dynamic DeepONet",
-        "dynamic_deeponet",
-        dynamic_deeponet_checkpoint_name,
-        make_dynamic_deeponet_for_comparison,
-        "dynamic_deeponet_history",
-        deeponet_batch_to_xy,
-    ),
-    (
-        "Deformable DeepONet",
-        "deformable_deeponet",
-        deformable_deeponet_checkpoint_name,
-        make_deformable_deeponet_for_comparison,
-        "deformable_deeponet_history",
-        deeponet_batch_to_xy,
-    ),
+
+model_specs = {
+    "MLP": {
+        "variable_name": "mlp",
+        "checkpoint_name": mlp_checkpoint_name,
+        "factory": make_mlp_for_comparison,
+        "history_name": "mlp_history",
+        "batch_to_xy": mlp_batch_to_xy,
+    },
+    "MLP MSE baseline": {
+        "variable_name": "mlp_mse",
+        "checkpoint_name": mlp_mse_checkpoint_name,
+        "factory": make_mlp_mse_for_comparison,
+        "history_name": "mlp_mse_history",
+        "batch_to_xy": mlp_batch_to_xy,
+    },
+    "FNO": {
+        "variable_name": "fno",
+        "checkpoint_name": fno_checkpoint_name,
+        "factory": make_fno_for_comparison,
+        "history_name": "fno_history",
+        "batch_to_xy": fno_batch_to_xy,
+    },
+    "DeepONet": {
+        "variable_name": "deeponet",
+        "checkpoint_name": deeponet_checkpoint_name,
+        "factory": make_deeponet_for_comparison,
+        "history_name": "deeponet_history",
+        "batch_to_xy": deeponet_batch_to_xy,
+    },
+    "FiLM DeepONet": {
+        "variable_name": "film_deeponet",
+        "checkpoint_name": film_deeponet_checkpoint_name,
+        "factory": make_film_deeponet_for_comparison,
+        "history_name": "film_deeponet_history",
+        "batch_to_xy": deeponet_batch_to_xy,
+    },
+    "Bilinear Fusion DeepONet": {
+        "variable_name": "bilinear_fusion_deeponet",
+        "checkpoint_name": bilinear_fusion_deeponet_checkpoint_name,
+        "factory": make_bilinear_fusion_deeponet_for_comparison,
+        "history_name": "bilinear_fusion_deeponet_history",
+        "batch_to_xy": deeponet_batch_to_xy,
+    },
+    "Attention Fusion DeepONet": {
+        "variable_name": "attention_fusion_deeponet",
+        "checkpoint_name": attention_fusion_deeponet_checkpoint_name,
+        "factory": make_attention_fusion_deeponet_for_comparison,
+        "history_name": "attention_fusion_deeponet_history",
+        "batch_to_xy": deeponet_batch_to_xy,
+    },
+    "SIREN DeepONet": {
+        "variable_name": "siren_deeponet",
+        "checkpoint_name": siren_deeponet_checkpoint_name,
+        "factory": make_siren_deeponet_for_comparison,
+        "history_name": "siren_deeponet_history",
+        "batch_to_xy": deeponet_batch_to_xy,
+    },
+    "Mamba Fusion DeepONet": {
+        "variable_name": "mamba_fusion_deeponet",
+        "checkpoint_name": mamba_fusion_deeponet_checkpoint_name,
+        "factory": make_mamba_fusion_deeponet_for_comparison,
+        "history_name": "mamba_fusion_deeponet_history",
+        "batch_to_xy": deeponet_batch_to_xy,
+    },
+
+    "Mamba SIREN Dynamic Deformable DeepONet": {
+        "variable_name": "mamba_siren_dynamic_deformable_deeponet",
+        "checkpoint_name": mamba_siren_dynamic_deformable_deeponet_checkpoint_name,
+        "factory": make_mamba_siren_dynamic_deformable_deeponet_for_comparison,
+        "history_name": "mamba_siren_dynamic_deformable_deeponet_history",
+        "batch_to_xy": deeponet_batch_to_xy,
+    },
+    "Mamba Operator": {
+        "variable_name": "mamba_operator",
+        "checkpoint_name": mamba_operator_checkpoint_name,
+        "factory": make_mamba_operator_for_comparison,
+        "history_name": "mamba_operator_history",
+        "batch_to_xy": deeponet_batch_to_xy,
+    },
+    "Dynamic DeepONet": {
+        "variable_name": "dynamic_deeponet",
+        "checkpoint_name": dynamic_deeponet_checkpoint_name,
+        "factory": make_dynamic_deeponet_for_comparison,
+        "history_name": "dynamic_deeponet_history",
+        "batch_to_xy": deeponet_batch_to_xy,
+    },
+    "Deformable DeepONet": {
+        "variable_name": "deformable_deeponet",
+        "checkpoint_name": deformable_deeponet_checkpoint_name,
+        "factory": make_deformable_deeponet_for_comparison,
+        "history_name": "deformable_deeponet_history",
+        "batch_to_xy": deeponet_batch_to_xy,
+    },
+}
+
+comparison_result = utils.compare_forward_models(
+    globals(),
+    model_specs,
+    batch=comparison_batch,
+    seed=comparison_seed,
+    target_batch_to_xy=mlp_batch_to_xy,
+    sample_idx=comparison_sample_idx,
+    device=device,
+    image_title=comparison_image_title,
+    output_dir="article/images",
+    style=True,
+    save=True,
+    show=True,
+    hide_titles=False,
+    overwrite=True,
+)
+
+predictions = comparison_result["predictions"]
+target = comparison_result["target"]
+
+# %% Cell 37
+history_comparison = utils.compare_training_histories(
+    globals(),
+    model_specs,
+    image_title="Функции потерь deep Mamba vs Mamba op",
+    output_dir="article/images",
+    style=True,
+    save=True,
+    show=True,
+    hide_titles=True,
+    overwrite=True,
+    yscale="linear",
+    curves=("val", "train"),
+)
+
+# %% Cell 38
+top_metric_names = [
+    "mae",
+    "dominant_peak_level_mae_db",
+    "relative_derivative_l2",
+    "dominant_notch_level_mae_db"
 ]
 
-models_to_compare = []
-for label, variable_name, checkpoint_name, factory, history_name, batch_to_xy in model_specs:
-    model, history = utils.get_or_load_model(
-        globals(),
-        variable_name=variable_name,
-        checkpoint_name=checkpoint_name,
-        factory=factory,
-        history_variable_name=history_name,
-        device=device,
-    )
-    models_to_compare.append((label, model, history, batch_to_xy))
+metric_comparison = utils.compare_training_metrics(
+    globals(),
+    model_specs,
+    metric_names=top_metric_names,
+    image_title="Метрики mlp fno deep",
+    output_dir="article/images",
+    style=True,
+    save=True,
+    show=True,
+    hide_titles=False,
+    overwrite=True,
+    yscale=None,
+    best_mode="min",
+)
 
-# Target is available even if no model checkpoint exists.
-_, target = mlp_batch_to_xy(comparison_batch, torch.device(device))
-target = target.detach().cpu()
-
-if comparison_sample_idx < 0 or comparison_sample_idx >= target.shape[0]:
-    raise IndexError(
-        f"comparison_sample_idx={comparison_sample_idx} is outside validation batch size {target.shape[0]}"
-    )
-
-predictions = {}
-for name, model, _, batch_to_xy in models_to_compare:
-    if model is None:
-        continue
-    prediction, _ = predict_on_batch(model, batch_to_xy, comparison_batch)
-    predictions[name] = prediction
-    plot_model_prediction_on_channel(
-        comparison_batch,
-        prediction,
-        target,
-        name,
-        sample_idx=comparison_sample_idx,
-    )
-
-if not predictions:
-    print("No trained models are available for comparison. Run training cells or add checkpoints.")
-else:
-    print("=== Validation sample metrics ===")
-    y = target[comparison_sample_idx]
-    for name, prediction in predictions.items():
-        pred = prediction[comparison_sample_idx]
-        mae = torch.mean(torch.abs(pred - y)).item()
-        rmse = torch.sqrt(torch.mean((pred - y) ** 2)).item()
-        print(f"{name:8s} MAE dB: {mae:8.4f} | RMSE dB: {rmse:8.4f}")
-
-
-
-
-
-# In[ ]:
-
-
-# Cell 11: compare training histories
-
-
-history_specs = [
-    ("MLP", utils.get_or_load_history(globals(), "mlp_history", mlp_checkpoint_name)),
-    ("MLP MSE", utils.get_or_load_history(globals(), "mlp_mse_history", mlp_mse_checkpoint_name)),
-    ("FNO", utils.get_or_load_history(globals(), "fno_history", fno_checkpoint_name)),
-    ("DeepONet", utils.get_or_load_history(globals(), "deeponet_history", deeponet_checkpoint_name)),
-    ("FiLM DeepONet", utils.get_or_load_history(globals(), "film_deeponet_history", film_deeponet_checkpoint_name)),
-    ("Bilinear Fusion DeepONet", utils.get_or_load_history(globals(), "bilinear_fusion_deeponet_history", bilinear_fusion_deeponet_checkpoint_name)),
-    ("Attention Fusion DeepONet", utils.get_or_load_history(globals(), "attention_fusion_deeponet_history", attention_fusion_deeponet_checkpoint_name)),
-    ("SIREN DeepONet", utils.get_or_load_history(globals(), "siren_deeponet_history", siren_deeponet_checkpoint_name)),
-    ("Mamba Fusion DeepONet", utils.get_or_load_history(globals(), "mamba_fusion_deeponet_history", mamba_fusion_deeponet_checkpoint_name)),
-    ("Mamba Operator", utils.get_or_load_history(globals(), "mamba_operator_history", mamba_operator_checkpoint_name)),
-    ("Dynamic DeepONet", utils.get_or_load_history(globals(), "dynamic_deeponet_history", dynamic_deeponet_checkpoint_name)),
-    ("Deformable DeepONet", utils.get_or_load_history(globals(), "deformable_deeponet_history", deformable_deeponet_checkpoint_name)),
-]
-
-print("=== Loaded history lengths ===")
-for name, history in history_specs:
-    print(
-        f"{name:8s} "
-        f"train={len(utils.history_get(history, 'train_loss')):3d} "
-        f"val={len(utils.history_get(history, 'val_loss')):3d} "
-        f"train_steps={len(utils.history_get(history, 'step_train_loss')):4d} "
-        f"val_steps={len(utils.history_get(history, 'step_val_loss')):4d}"
-    )
-
-available_histories = [
-    (name, history)
-    for name, history in history_specs
-    if utils.history_get(history, "train_loss") or utils.history_get(history, "val_loss")
-]
-
-if not available_histories:
-    print("No training histories are available. Run training cells or load checkpoints with history.")
-else:
-    plt.figure(figsize=(10, 4))
-
-    for name, history in available_histories:
-        val_loss = utils.history_get(history, "val_loss")
-        train_loss = utils.history_get(history, "train_loss")
-        if val_loss:
-            plt.plot(val_loss, marker="o", label=f"{name} val")
-        if train_loss:
-            plt.plot(train_loss, linestyle="--", alpha=0.65, label=f"{name} train")
-
-    plt.xlabel("epoch")
-    plt.ylabel("loss")
-    plt.title("Training history comparison")
-    plt.grid(True, alpha=0.3)
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
-
-    print("=== Best losses ===")
-    for name, history in available_histories:
-        val_loss = utils.history_get(history, "val_loss")
-        train_loss = utils.history_get(history, "train_loss")
-        best_train = min(train_loss) if train_loss else None
-        best_val = min(val_loss) if val_loss else None
-        print(f"{name:8s} best train loss: {best_train} | best val loss: {best_val}")
-
-
-
-
-# ### Неожиданная геометрия
-
-# In[ ]:
-
-
-if run_unexpected_geometry_check:
+# %% Cell 39
+if globals().get("run_unexpected_geometry_check", False):
     mlp_mse_checkpoint_name = globals().get("mlp_mse_checkpoint_name", "mlp_mse_db")
     # Cell 12: unexpected geometry check
 
@@ -2371,13 +2311,8 @@ if run_unexpected_geometry_check:
 else:
     print("Unexpected geometry check skipped")
 
-
-# ## Масштабирование
-
-# In[ ]:
-
-
-if run_scaling_check:
+# %% Cell 40
+if globals().get("run_scaling_check", False):
     import numpy as np
     import torch
     import matplotlib.pyplot as plt
@@ -2559,13 +2494,8 @@ if run_scaling_check:
 else:
     print("Scaling check skipped")
 
-
-# ## Чувствителность к геометрии
-
-# In[ ]:
-
-
-if run_geometry_sensitivity_check:
+# %% Cell 41
+if globals().get("run_geometry_sensitivity_check", False):
     import torch
 
     # Choose model and adapter.
@@ -2618,11 +2548,8 @@ if run_geometry_sensitivity_check:
 else:
     print("Geometry sensitivity check skipped")
 
-
-# In[ ]:
-
-
-if run_frequency_grid_check:
+# %% Cell 42
+if globals().get("run_frequency_grid_check", False):
     import numpy as np
     import matplotlib.pyplot as plt
     import torch

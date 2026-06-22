@@ -1,5 +1,6 @@
 import math
-from typing import Any, Mapping
+from pathlib import Path
+from typing import Any, Mapping, Sequence
 
 import torch
 from torch import Tensor, nn
@@ -2496,7 +2497,6 @@ class TransferFunctionMambaFusionDeepONet(nn.Module):
         )
         self.output_bias = nn.Parameter(torch.zeros(out_channels))
         self.output_scale = basis_dim ** -0.5
-
     def forward(
         self,
         area: Tensor,
@@ -2534,6 +2534,517 @@ class TransferFunctionMambaFusionDeepONet(nn.Module):
         base_output = fused_tokens.sum(dim=-1) if self.residual_dot else None
 
         # Mamba processes the branch/trunk intersection along frequency.
+        n_frequencies = trunk_basis.shape[1]
+        fused_tokens = fused_tokens.reshape(
+            batch_size * self.out_channels,
+            n_frequencies,
+            self.basis_dim,
+        )
+        fused_tokens = self.fusion_norm(fused_tokens)
+        fused_tokens = self.fusion_mamba(fused_tokens)
+        correction = self.output_head(fused_tokens).squeeze(-1)
+        correction = correction.reshape(
+            batch_size,
+            self.out_channels,
+            n_frequencies,
+        )
+
+        if base_output is not None:
+            output = base_output + correction
+        else:
+            output = correction
+
+        output = output + self.output_bias.view(1, -1, 1)
+        output = output.transpose(1, 2).contiguous()
+
+        if self.out_channels == 1:
+            return output.squeeze(-1)
+
+        return output
+
+
+class DynamicDeformableGeometryBranchNet(nn.Module):
+    """
+    Branch network that combines dynamic and deformable 1D convolutions.
+
+    Dynamic layers adapt convolution kernels to the current geometry, while
+    deformable layers adapt sampling positions along the profile axis.
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 1,
+        hidden_channels: int = 64,
+        basis_dim: int = 128,
+        pooling_bins: int = 8,
+        out_channels: int = 1,
+        n_experts: int = 4,
+        routing_hidden_dim: int = 32,
+        temperature: float = 1.0,
+        max_offset: float = 2.0,
+        offset_hidden_channels: int | None = None,
+    ) -> None:
+        super().__init__()
+
+        self.basis_dim = basis_dim
+        self.out_channels = out_channels
+
+        self.stem = nn.Sequential(
+            DynamicConv1d(
+                in_channels,
+                hidden_channels,
+                kernel_size=7,
+                padding=3,
+                n_experts=n_experts,
+                routing_hidden_dim=routing_hidden_dim,
+                temperature=temperature,
+            ),
+            nn.GroupNorm(
+                num_groups=min(8, hidden_channels),
+                num_channels=hidden_channels,
+            ),
+            nn.GELU(),
+        )
+
+        self.blocks = nn.Sequential(
+            DynamicResidualConvBlock1d(
+                hidden_channels,
+                kernel_size=5,
+                dilation=1,
+                n_experts=n_experts,
+                routing_hidden_dim=routing_hidden_dim,
+                temperature=temperature,
+            ),
+            DeformableResidualConvBlock1d(
+                hidden_channels,
+                kernel_size=5,
+                dilation=2,
+                max_offset=max_offset,
+                offset_hidden_channels=offset_hidden_channels,
+            ),
+            DynamicResidualConvBlock1d(
+                hidden_channels,
+                kernel_size=5,
+                dilation=4,
+                n_experts=n_experts,
+                routing_hidden_dim=routing_hidden_dim,
+                temperature=temperature,
+            ),
+            DeformableResidualConvBlock1d(
+                hidden_channels,
+                kernel_size=5,
+                dilation=8,
+                max_offset=max_offset,
+                offset_hidden_channels=offset_hidden_channels,
+            ),
+        )
+
+        self.pool = nn.AdaptiveAvgPool1d(pooling_bins)
+        self.head = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(hidden_channels * pooling_bins, 256),
+            nn.GELU(),
+            nn.LayerNorm(256),
+            nn.Linear(256, out_channels * basis_dim),
+        )
+
+    def forward(self, area: Tensor) -> Tensor:
+        if area.ndim != 3:
+            raise ValueError(
+                "area must have shape [B, C, Nx], "
+                f"got {tuple(area.shape)}"
+            )
+
+        x = self.stem(area)
+        x = self.blocks(x)
+        x = self.pool(x)
+        x = self.head(x)
+
+        return x.view(
+            area.shape[0],
+            self.out_channels,
+            self.basis_dim,
+        )
+
+
+def _checkpoint_state_dict(checkpoint: Any) -> Mapping[str, Any]:
+    if isinstance(checkpoint, Mapping) and "model_state" in checkpoint:
+        return checkpoint["model_state"]
+    if isinstance(checkpoint, Mapping) and "state_dict" in checkpoint:
+        return checkpoint["state_dict"]
+    if isinstance(checkpoint, Mapping):
+        return checkpoint
+    raise TypeError("checkpoint must be a mapping or contain model_state")
+
+
+def _resolve_checkpoint_path(
+    checkpoint: str | Path,
+    checkpoint_dir: str | Path,
+) -> Path:
+    path = Path(checkpoint)
+    if path.exists():
+        return path
+
+    checkpoint_dir = Path(checkpoint_dir)
+    if path.suffix:
+        return checkpoint_dir / path
+
+    best_candidate = checkpoint_dir / f"{path.name}_best.pt"
+    if best_candidate.exists():
+        return best_candidate
+
+    return checkpoint_dir / f"{path.name}.pt"
+
+
+def _copy_matching_checkpoint_entries(
+    model: nn.Module,
+    *,
+    state_dict: Mapping[str, Any],
+    block_name: str,
+    prefix_pairs: Sequence[tuple[str, str]],
+    verbose: bool,
+) -> tuple[int, int]:
+    own_state = model.state_dict()
+    updated_state = dict(own_state)
+    copied = 0
+    skipped = 0
+
+    for source_key, value in state_dict.items():
+        if source_key == "_metadata":
+            continue
+
+        target_key = None
+        for source_prefix, target_prefix in prefix_pairs:
+            if source_key == source_prefix:
+                target_key = target_prefix
+                break
+            if source_key.startswith(source_prefix):
+                target_key = target_prefix + source_key[len(source_prefix):]
+                break
+
+        if target_key is None:
+            continue
+
+        if target_key not in own_state or not isinstance(value, Tensor):
+            skipped += 1
+            continue
+
+        target_value = own_state[target_key]
+        if target_value.shape != value.shape:
+            skipped += 1
+            continue
+
+        updated_state[target_key] = value.detach().to(
+            device=target_value.device,
+            dtype=target_value.dtype,
+        )
+        copied += 1
+
+    model.load_state_dict(updated_state, strict=True)
+
+    if verbose:
+        print(
+            f"warm-start {block_name}: copied={copied}, "
+            f"skipped={skipped}"
+        )
+
+    return copied, skipped
+
+
+def _warm_start_one_checkpoint(
+    model: nn.Module,
+    *,
+    checkpoint: str | Path | None,
+    block_name: str,
+    prefix_pairs: Sequence[tuple[str, str]],
+    checkpoint_dir: str | Path,
+    map_location: str | torch.device,
+    verbose: bool,
+) -> tuple[int, int]:
+    if checkpoint is None:
+        if verbose:
+            print(f"warm-start {block_name}: skipped, checkpoint is None")
+        return 0, 0
+
+    checkpoint_path = _resolve_checkpoint_path(
+        checkpoint,
+        checkpoint_dir,
+    )
+    if not checkpoint_path.exists():
+        if verbose:
+            print(
+                f"warm-start {block_name}: skipped, "
+                f"checkpoint not found: {checkpoint_path}"
+            )
+        return 0, 0
+
+    loaded_checkpoint = torch.load(
+        checkpoint_path,
+        map_location=map_location,
+        weights_only=False,
+    )
+    state_dict = _checkpoint_state_dict(loaded_checkpoint)
+    copied, skipped = _copy_matching_checkpoint_entries(
+        model,
+        state_dict=state_dict,
+        block_name=block_name,
+        prefix_pairs=prefix_pairs,
+        verbose=verbose,
+    )
+
+    if verbose:
+        print(f"warm-start {block_name}: source={checkpoint_path}")
+
+    return copied, skipped
+
+
+def warm_start_mamba_siren_dynamic_deformable_deeponet(
+    model: nn.Module,
+    *,
+    mamba_fusion_checkpoint: str | Path | None = None,
+    siren_checkpoint: str | Path | None = None,
+    dynamic_checkpoint: str | Path | None = None,
+    deformable_checkpoint: str | Path | None = None,
+    checkpoint_dir: str | Path = "checkpoints",
+    map_location: str | torch.device = "cpu",
+    verbose: bool = True,
+) -> dict[str, tuple[int, int]]:
+    """
+    Load compatible blocks from separately trained models.
+
+    Checkpoint arguments accept either a full path or a checkpoint stem such
+    as "siren_deeponet_db"; stems resolve to checkpoints/<stem>_best.pt.
+    Passing None skips that donor.
+    """
+
+    return {
+        "mamba_fusion": _warm_start_one_checkpoint(
+            model,
+            checkpoint=mamba_fusion_checkpoint,
+            block_name="mamba_fusion",
+            prefix_pairs=(
+                ("fusion_norm.", "fusion_norm."),
+                ("fusion_mamba.", "fusion_mamba."),
+                ("output_head.", "output_head."),
+                ("output_bias", "output_bias"),
+            ),
+            checkpoint_dir=checkpoint_dir,
+            map_location=map_location,
+            verbose=verbose,
+        ),
+        "siren": _warm_start_one_checkpoint(
+            model,
+            checkpoint=siren_checkpoint,
+            block_name="siren",
+            prefix_pairs=(("trunk_net.", "trunk_net."),),
+            checkpoint_dir=checkpoint_dir,
+            map_location=map_location,
+            verbose=verbose,
+        ),
+        "dynamic": _warm_start_one_checkpoint(
+            model,
+            checkpoint=dynamic_checkpoint,
+            block_name="dynamic",
+            prefix_pairs=(
+                ("branch_net.stem.", "branch_net.stem."),
+                ("branch_net.blocks.0.", "branch_net.blocks.0."),
+                ("branch_net.blocks.2.", "branch_net.blocks.2."),
+            ),
+            checkpoint_dir=checkpoint_dir,
+            map_location=map_location,
+            verbose=verbose,
+        ),
+        "deformable": _warm_start_one_checkpoint(
+            model,
+            checkpoint=deformable_checkpoint,
+            block_name="deformable",
+            prefix_pairs=(
+                ("branch_net.blocks.1.", "branch_net.blocks.1."),
+                ("branch_net.blocks.3.", "branch_net.blocks.3."),
+            ),
+            checkpoint_dir=checkpoint_dir,
+            map_location=map_location,
+            verbose=verbose,
+        ),
+    }
+
+
+class TransferFunctionMambaSIRENDynamicDeformableDeepONet(nn.Module):
+    """
+    Hybrid DeepONet:
+
+    * dynamic + deformable CNN branch for geometry,
+    * SIREN trunk for frequency,
+    * Mamba fusion at the branch/trunk intersection.
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 1,
+        hidden_channels: int = 64,
+        basis_dim: int = 128,
+        pooling_bins: int = 8,
+        trunk_hidden_dim: int = 128,
+        trunk_hidden_layers: int = 3,
+        first_omega_0: float = 10.0,
+        hidden_omega_0: float = 10.0,
+        out_channels: int = 1,
+        n_experts: int = 4,
+        routing_hidden_dim: int = 32,
+        temperature: float = 1.0,
+        max_offset: float = 2.0,
+        offset_hidden_channels: int | None = None,
+        mamba_backend: str = "minimal_mamba2",
+        mamba_depth: int = 1,
+        mamba_expansion: int = 2,
+        mamba_kernel_size: int = 4,
+        mamba_d_state: int = 32,
+        mamba_headdim: int = 32,
+        mamba_chunk_size: int = 64,
+        mamba_use_mem_eff_path: bool = False,
+        dropout: float = 0.0,
+        residual_dot: bool = True,
+
+        warm_start_mamba_fusion_checkpoint: str | Path | None = None,
+        warm_start_siren_checkpoint: str | Path | None = None,
+        warm_start_dynamic_checkpoint: str | Path | None = None,
+        warm_start_deformable_checkpoint: str | Path | None = None,
+        warm_start_checkpoint_dir: str | Path = "checkpoints",
+        warm_start_map_location: str | torch.device = "cpu",
+        warm_start_verbose: bool = True,
+    ) -> None:
+        super().__init__()
+
+        if out_channels < 1:
+            raise ValueError("out_channels must be >= 1")
+        if basis_dim < 1:
+            raise ValueError("basis_dim must be >= 1")
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.basis_dim = basis_dim
+        self.residual_dot = residual_dot
+        self.model_name = "transfer_function_mamba_siren_dynamic_deformable_deeponet"
+
+        self.branch_net = DynamicDeformableGeometryBranchNet(
+            in_channels=in_channels,
+            hidden_channels=hidden_channels,
+            basis_dim=basis_dim,
+            pooling_bins=pooling_bins,
+            out_channels=out_channels,
+            n_experts=n_experts,
+            routing_hidden_dim=routing_hidden_dim,
+            temperature=temperature,
+            max_offset=max_offset,
+            offset_hidden_channels=offset_hidden_channels,
+        )
+
+        self.trunk_net = FrequencySIRENTrunkNet(
+            basis_dim=basis_dim,
+            input_dim=1,
+            hidden_dim=trunk_hidden_dim,
+            n_hidden_layers=trunk_hidden_layers,
+            first_omega_0=first_omega_0,
+            hidden_omega_0=hidden_omega_0,
+        )
+
+        def make_mamba_block() -> nn.Module:
+            if mamba_backend == "minimal_mamba2":
+                return MinimalMamba2Block(
+                    d_model=basis_dim,
+                    depth=mamba_depth,
+                    d_state=mamba_d_state,
+                    d_conv=mamba_kernel_size,
+                    expand=mamba_expansion,
+                    headdim=mamba_headdim,
+                    chunk_size=mamba_chunk_size,
+                    dropout=dropout,
+                )
+
+            if mamba_backend == "external_mamba2":
+                return ExternalMamba2Block(
+                    d_model=basis_dim,
+                    depth=mamba_depth,
+                    d_state=mamba_d_state,
+                    d_conv=mamba_kernel_size,
+                    expand=mamba_expansion,
+                    headdim=mamba_headdim,
+                    chunk_size=mamba_chunk_size,
+                    use_mem_eff_path=mamba_use_mem_eff_path,
+                )
+
+            if mamba_backend == "lightweight":
+                return LightweightMambaBlock(
+                    d_model=basis_dim,
+                    depth=mamba_depth,
+                    expansion=mamba_expansion,
+                    kernel_size=mamba_kernel_size,
+                    dropout=dropout,
+                )
+
+            raise ValueError(
+                "mamba_backend must be 'minimal_mamba2', "
+                "'external_mamba2', or 'lightweight'"
+            )
+
+        self.fusion_norm = nn.LayerNorm(basis_dim)
+        self.fusion_mamba = make_mamba_block()
+        self.output_head = nn.Sequential(
+            nn.LayerNorm(basis_dim),
+            nn.Linear(basis_dim, basis_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(basis_dim, 1),
+        )
+        self.output_bias = nn.Parameter(torch.zeros(out_channels))
+        self.output_scale = basis_dim ** -0.5
+
+        self.warm_start_summary = warm_start_mamba_siren_dynamic_deformable_deeponet(
+            self,
+            mamba_fusion_checkpoint=warm_start_mamba_fusion_checkpoint,
+            siren_checkpoint=warm_start_siren_checkpoint,
+            dynamic_checkpoint=warm_start_dynamic_checkpoint,
+            deformable_checkpoint=warm_start_deformable_checkpoint,
+            checkpoint_dir=warm_start_checkpoint_dir,
+            map_location=warm_start_map_location,
+            verbose=warm_start_verbose,
+        )
+
+    def forward(
+        self,
+        area: Tensor,
+        kappa: Tensor,
+    ) -> Tensor:
+        if area.ndim != 3:
+            raise ValueError(
+                "area must have shape [B, C, Nx], "
+                f"got {tuple(area.shape)}"
+            )
+        if area.shape[1] != self.in_channels:
+            raise ValueError(
+                f"Expected {self.in_channels} area channels, "
+                f"got {area.shape[1]}"
+            )
+        if kappa.ndim != 3 or kappa.shape[-1] != 1:
+            raise ValueError(
+                "kappa must have shape [B, Nf, 1], "
+                f"got {tuple(kappa.shape)}"
+            )
+        if area.shape[0] != kappa.shape[0]:
+            raise ValueError("area and kappa batch sizes must match")
+
+        batch_size = area.shape[0]
+        branch_coefficients = self.branch_net(area)
+        trunk_basis = self.trunk_net(kappa)
+
+        fused_tokens = (
+            branch_coefficients[:, :, None, :]
+            * trunk_basis[:, None, :, :]
+            * self.output_scale
+        )
+
+        base_output = fused_tokens.sum(dim=-1) if self.residual_dot else None
+
         n_frequencies = trunk_basis.shape[1]
         fused_tokens = fused_tokens.reshape(
             batch_size * self.out_channels,
