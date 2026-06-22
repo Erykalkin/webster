@@ -1025,8 +1025,8 @@ mamba_operator_val_loader = make_streaming_dataloader(
 
 mamba_operator = TransferFunctionMambaOperator(
     in_channels=1,
-    d_model=64,
-    hidden_channels=96,
+    d_model=32,
+    hidden_channels=64,
     frequency_bands=16,
     frequency_hidden_dim=128,
     mamba_backend="minimal_mamba2",
@@ -1511,20 +1511,20 @@ if run_finetune:
     def make_mamba_operator_for_finetune():
         return TransferFunctionMambaOperator(
             in_channels=1,
-            d_model=128,
-            hidden_channels=96,
+            d_model=32,
+            hidden_channels=64,
             frequency_bands=16,
             frequency_hidden_dim=128,
             mamba_backend="minimal_mamba2",
             mamba_depth=2,
             mamba_expansion=2,
             mamba_kernel_size=4,
-            mamba_d_state=64,
-            mamba_headdim=64,
-            mamba_chunk_size=64,
+            mamba_d_state=16,
+            mamba_headdim=32,
+            mamba_chunk_size=32,
             dropout=0.0,
             out_channels=1,
-            frequency_chunk_size=32,
+            frequency_chunk_size=8,
         )
 
 
@@ -1927,20 +1927,20 @@ def make_mamba_fusion_deeponet_for_comparison():
 def make_mamba_operator_for_comparison():
     return TransferFunctionMambaOperator(
         in_channels=1,
-        d_model=128,
-        hidden_channels=96,
+        d_model=32,
+        hidden_channels=64,
         frequency_bands=16,
         frequency_hidden_dim=128,
         mamba_backend="minimal_mamba2",
         mamba_depth=2,
         mamba_expansion=2,
         mamba_kernel_size=4,
-        mamba_d_state=64,
-        mamba_headdim=64,
-        mamba_chunk_size=64,
+        mamba_d_state=16,
+        mamba_headdim=32,
+        mamba_chunk_size=32,
         dropout=0.0,
         out_channels=1,
-        frequency_chunk_size=32,
+        frequency_chunk_size=8,
     )
 
 
@@ -2782,4 +2782,3 @@ if run_frequency_grid_check:
     plt.show()
 else:
     print("Frequency grid check skipped")
-
