@@ -65,6 +65,7 @@ class TrainHistory:
     planned_val_steps: int | None = None
     planned_epochs: int | None = None
     planned_validations: int | None = None
+    batch_size: int | None = None
     best_checkpoint_path: str | None = None
     intermediate_checkpoint_paths: list[str] = field(default_factory=list)
 
@@ -94,6 +95,7 @@ def make_train_history(history: TrainHistory | Mapping[str, Any] | None = None) 
         planned_val_steps=history.get("planned_val_steps"),
         planned_epochs=history.get("planned_epochs"),
         planned_validations=history.get("planned_validations"),
+        batch_size=history.get("batch_size"),
         best_checkpoint_path=history.get("best_checkpoint_path"),
         intermediate_checkpoint_paths=list(
             history.get("intermediate_checkpoint_paths", []) or []
@@ -187,6 +189,7 @@ def history_to_mapping(history: Any | None) -> Mapping[str, Any]:
         "planned_val_steps": getattr(history, "planned_val_steps", None),
         "planned_epochs": getattr(history, "planned_epochs", None),
         "planned_validations": getattr(history, "planned_validations", None),
+        "batch_size": getattr(history, "batch_size", None),
     }
 
 
@@ -302,6 +305,16 @@ def _checkpoint_stem(model: nn.Module, config: TrainConfig) -> str:
     return _safe_checkpoint_stem(str(name))
 
 
+def _loader_batch_size(loader: Any) -> int | None:
+    batch_size = getattr(loader, "batch_size", None)
+    if batch_size is None:
+        return None
+    try:
+        return int(batch_size)
+    except (TypeError, ValueError):
+        return None
+
+
 def _checkpoint_payload(
     *,
     model: nn.Module,
@@ -311,11 +324,13 @@ def _checkpoint_payload(
     global_step: int,
     best_loss: float,
     kind: str,
+    batch_size: int | None,
 ) -> dict[str, Any]:
     return {
         "kind": kind,
         "epoch": epoch,
         "global_step": global_step,
+        "batch_size": batch_size,
         "best_loss": best_loss,
         "model_class": model.__class__.__name__,
         "model_name": getattr(model, "model_name", model.__class__.__name__),
@@ -335,6 +350,7 @@ def save_training_checkpoint(
     global_step: int,
     best_loss: float,
     kind: str,
+    batch_size: int | None = None,
 ) -> Path:
     checkpoint_dir = Path(config.checkpoint_dir)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -353,6 +369,7 @@ def save_training_checkpoint(
             global_step=global_step,
             best_loss=best_loss,
             kind=kind,
+            batch_size=batch_size,
         ),
         path,
     )
@@ -368,6 +385,22 @@ def make_optimizer(
 ) -> torch.optim.Optimizer:
     params = [p for p in model.parameters() if p.requires_grad]
     return torch.optim.AdamW(params, lr=lr, weight_decay=weight_decay, betas=betas)
+
+
+def make_plateau_scheduler(
+    optimizer: torch.optim.Optimizer,
+    *,
+    factor: float = 0.5,
+    patience: int = 3,
+    min_lr: float = 1e-6,
+) -> torch.optim.lr_scheduler.ReduceLROnPlateau:
+    return torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode="min",
+        factor=factor,
+        patience=patience,
+        min_lr=min_lr,
+    )
 
 
 def create_model_and_optimizer(
@@ -935,6 +968,9 @@ def fit(
     history = make_train_history(resume_history)
     for name in resolved_metrics:
         history.metrics.setdefault(name, [])
+    current_batch_size = _loader_batch_size(train_loader)
+    if current_batch_size is not None:
+        history.batch_size = current_batch_size
 
     initial_epoch_count = len(history.train_loss)
     initial_global_step = len(history.step_train_loss)
@@ -1003,6 +1039,7 @@ def fit(
                 global_step=global_step,
                 best_loss=best_loss,
                 kind="intermediate",
+                batch_size=current_batch_size,
             )
 
         if (
@@ -1106,6 +1143,7 @@ def fit(
             global_step=global_step,
             best_loss=best_loss,
             kind="best",
+            batch_size=current_batch_size,
         )
         history.best_checkpoint_path = str(path)
 

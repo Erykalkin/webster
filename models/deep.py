@@ -1939,6 +1939,350 @@ class TransferFunctionDeepONet(nn.Module):
         return output
 
 
+class TransferFunctionFiLMDeepONet(nn.Module):
+    """
+    DeepONet with FiLM modulation at the branch/trunk intersection.
+
+    Geometry branch coefficients predict per-basis gamma/beta parameters that
+    modulate the frequency trunk basis before the DeepONet dot product.
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 1,
+        hidden_channels: int = 64,
+        basis_dim: int = 128,
+        pooling_bins: int = 8,
+        frequency_bands: int = 8,
+        trunk_hidden_dim: int = 128,
+        out_channels: int = 1,
+    ) -> None:
+        super().__init__()
+
+        if out_channels < 1:
+            raise ValueError("out_channels must be >= 1")
+        if basis_dim < 1:
+            raise ValueError("basis_dim must be >= 1")
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.basis_dim = basis_dim
+        self.model_name = "transfer_function_film_deeponet"
+
+        self.branch_net = GeometryBranchNet(
+            in_channels=in_channels,
+            hidden_channels=hidden_channels,
+            basis_dim=basis_dim,
+            pooling_bins=pooling_bins,
+            out_channels=out_channels,
+        )
+        self.trunk_net = FrequencyTrunkNet(
+            basis_dim=basis_dim,
+            frequency_bands=frequency_bands,
+            hidden_dim=trunk_hidden_dim,
+        )
+        self.film_head = nn.Sequential(
+            nn.LayerNorm(basis_dim),
+            nn.Linear(basis_dim, 2 * basis_dim),
+        )
+        self.output_bias = nn.Parameter(torch.zeros(out_channels))
+        self.output_scale = basis_dim ** -0.5
+
+    def forward(self, area: Tensor, kappa: Tensor) -> Tensor:
+        if area.ndim != 3:
+            raise ValueError(
+                "area must have shape [B, C, Nx], "
+                f"got {tuple(area.shape)}"
+            )
+        if area.shape[1] != self.in_channels:
+            raise ValueError(
+                f"Expected {self.in_channels} area channels, "
+                f"got {area.shape[1]}"
+            )
+        if kappa.ndim != 3 or kappa.shape[-1] != 1:
+            raise ValueError(
+                "kappa must have shape [B, Nf, 1], "
+                f"got {tuple(kappa.shape)}"
+            )
+        if area.shape[0] != kappa.shape[0]:
+            raise ValueError("area and kappa batch sizes must match")
+
+        branch_coefficients = self.branch_net(area)
+        trunk_basis = self.trunk_net(kappa)
+        gamma, beta = self.film_head(branch_coefficients).chunk(2, dim=-1)
+
+        modulated_trunk = (
+            trunk_basis[:, None, :, :]
+            * (1.0 + gamma[:, :, None, :])
+            + beta[:, :, None, :]
+        )
+        output = (
+            branch_coefficients[:, :, None, :]
+            * modulated_trunk
+        ).sum(dim=-1)
+
+        output = output.transpose(1, 2).contiguous()
+        output = (
+            output * self.output_scale
+            + self.output_bias.view(1, 1, -1)
+        )
+
+        if self.out_channels == 1:
+            return output.squeeze(-1)
+
+        return output
+
+
+class TransferFunctionBilinearFusionDeepONet(nn.Module):
+    """
+    DeepONet with low-rank bilinear branch/trunk fusion.
+
+    Instead of only multiplying equal basis coordinates, branch and trunk
+    coefficients are projected into a shared fusion space before multiplication.
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 1,
+        hidden_channels: int = 64,
+        basis_dim: int = 128,
+        pooling_bins: int = 8,
+        frequency_bands: int = 8,
+        trunk_hidden_dim: int = 128,
+        fusion_rank: int | None = None,
+        out_channels: int = 1,
+        residual_dot: bool = True,
+    ) -> None:
+        super().__init__()
+
+        if out_channels < 1:
+            raise ValueError("out_channels must be >= 1")
+        if basis_dim < 1:
+            raise ValueError("basis_dim must be >= 1")
+
+        fusion_rank = basis_dim if fusion_rank is None else fusion_rank
+        if fusion_rank < 1:
+            raise ValueError("fusion_rank must be >= 1")
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.basis_dim = basis_dim
+        self.fusion_rank = fusion_rank
+        self.residual_dot = residual_dot
+        self.model_name = "transfer_function_bilinear_fusion_deeponet"
+
+        self.branch_net = GeometryBranchNet(
+            in_channels=in_channels,
+            hidden_channels=hidden_channels,
+            basis_dim=basis_dim,
+            pooling_bins=pooling_bins,
+            out_channels=out_channels,
+        )
+        self.trunk_net = FrequencyTrunkNet(
+            basis_dim=basis_dim,
+            frequency_bands=frequency_bands,
+            hidden_dim=trunk_hidden_dim,
+        )
+        self.branch_projection = nn.Sequential(
+            nn.LayerNorm(basis_dim),
+            nn.Linear(basis_dim, fusion_rank),
+        )
+        self.trunk_projection = nn.Sequential(
+            nn.LayerNorm(basis_dim),
+            nn.Linear(basis_dim, fusion_rank),
+        )
+        self.output_bias = nn.Parameter(torch.zeros(out_channels))
+        self.output_scale = fusion_rank ** -0.5
+        self.residual_scale = basis_dim ** -0.5
+
+    def forward(self, area: Tensor, kappa: Tensor) -> Tensor:
+        if area.ndim != 3:
+            raise ValueError(
+                "area must have shape [B, C, Nx], "
+                f"got {tuple(area.shape)}"
+            )
+        if area.shape[1] != self.in_channels:
+            raise ValueError(
+                f"Expected {self.in_channels} area channels, "
+                f"got {area.shape[1]}"
+            )
+        if kappa.ndim != 3 or kappa.shape[-1] != 1:
+            raise ValueError(
+                "kappa must have shape [B, Nf, 1], "
+                f"got {tuple(kappa.shape)}"
+            )
+        if area.shape[0] != kappa.shape[0]:
+            raise ValueError("area and kappa batch sizes must match")
+
+        branch_coefficients = self.branch_net(area)
+        trunk_basis = self.trunk_net(kappa)
+
+        branch_fused = self.branch_projection(branch_coefficients)
+        trunk_fused = self.trunk_projection(trunk_basis)
+        output = torch.einsum(
+            "bcr,bfr->bfc",
+            branch_fused,
+            trunk_fused,
+        ) * self.output_scale
+
+        if self.residual_dot:
+            output = output + torch.einsum(
+                "bcp,bfp->bfc",
+                branch_coefficients,
+                trunk_basis,
+            ) * self.residual_scale
+
+        output = output + self.output_bias.view(1, 1, -1)
+
+        if self.out_channels == 1:
+            return output.squeeze(-1)
+
+        return output
+
+
+class TransferFunctionAttentionFusionDeepONet(nn.Module):
+    """
+    Lightweight cross-attention at the branch/trunk intersection.
+
+    Trunk basis vectors are frequency queries. Geometry branch coefficients are
+    converted to a small memory of key/value tokens, so the attention cost is
+    O(B * out_channels * Nf * memory_tokens), not O(Nf^2).
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 1,
+        hidden_channels: int = 64,
+        basis_dim: int = 128,
+        pooling_bins: int = 8,
+        frequency_bands: int = 8,
+        trunk_hidden_dim: int = 128,
+        attention_dim: int = 64,
+        memory_tokens: int = 8,
+        out_channels: int = 1,
+        dropout: float = 0.0,
+        residual_dot: bool = True,
+    ) -> None:
+        super().__init__()
+
+        if out_channels < 1:
+            raise ValueError("out_channels must be >= 1")
+        if basis_dim < 1:
+            raise ValueError("basis_dim must be >= 1")
+        if attention_dim < 1:
+            raise ValueError("attention_dim must be >= 1")
+        if memory_tokens < 1:
+            raise ValueError("memory_tokens must be >= 1")
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.basis_dim = basis_dim
+        self.attention_dim = attention_dim
+        self.memory_tokens = memory_tokens
+        self.residual_dot = residual_dot
+        self.model_name = "transfer_function_attention_fusion_deeponet"
+
+        self.branch_net = GeometryBranchNet(
+            in_channels=in_channels,
+            hidden_channels=hidden_channels,
+            basis_dim=basis_dim,
+            pooling_bins=pooling_bins,
+            out_channels=out_channels,
+        )
+        self.trunk_net = FrequencyTrunkNet(
+            basis_dim=basis_dim,
+            frequency_bands=frequency_bands,
+            hidden_dim=trunk_hidden_dim,
+        )
+        self.query_projection = nn.Sequential(
+            nn.LayerNorm(basis_dim),
+            nn.Linear(basis_dim, attention_dim),
+        )
+        self.memory_projection = nn.Sequential(
+            nn.LayerNorm(basis_dim),
+            nn.Linear(
+                basis_dim,
+                2 * memory_tokens * attention_dim,
+            ),
+        )
+        self.output_head = nn.Sequential(
+            nn.LayerNorm(attention_dim),
+            nn.Linear(attention_dim, attention_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(attention_dim, 1),
+        )
+        self.output_bias = nn.Parameter(torch.zeros(out_channels))
+        self.residual_scale = basis_dim ** -0.5
+
+    def forward(self, area: Tensor, kappa: Tensor) -> Tensor:
+        if area.ndim != 3:
+            raise ValueError(
+                "area must have shape [B, C, Nx], "
+                f"got {tuple(area.shape)}"
+            )
+        if area.shape[1] != self.in_channels:
+            raise ValueError(
+                f"Expected {self.in_channels} area channels, "
+                f"got {area.shape[1]}"
+            )
+        if kappa.ndim != 3 or kappa.shape[-1] != 1:
+            raise ValueError(
+                "kappa must have shape [B, Nf, 1], "
+                f"got {tuple(kappa.shape)}"
+            )
+        if area.shape[0] != kappa.shape[0]:
+            raise ValueError("area and kappa batch sizes must match")
+
+        batch_size = area.shape[0]
+        branch_coefficients = self.branch_net(area)
+        trunk_basis = self.trunk_net(kappa)
+
+        query = self.query_projection(trunk_basis)
+        memory = self.memory_projection(branch_coefficients)
+        memory = memory.view(
+            batch_size,
+            self.out_channels,
+            self.memory_tokens,
+            2,
+            self.attention_dim,
+        )
+        key = memory[:, :, :, 0, :]
+        value = memory[:, :, :, 1, :]
+
+        attention_logits = torch.einsum(
+            "bfd,bcmd->bcfm",
+            query,
+            key,
+        ) * (self.attention_dim ** -0.5)
+        attention_weights = torch.softmax(
+            attention_logits,
+            dim=-1,
+        )
+        attended = torch.einsum(
+            "bcfm,bcmd->bcfd",
+            attention_weights,
+            value,
+        )
+
+        output = self.output_head(attended).squeeze(-1)
+
+        if self.residual_dot:
+            output = output + torch.einsum(
+                "bcp,bfp->bcf",
+                branch_coefficients,
+                trunk_basis,
+            ) * self.residual_scale
+
+        output = output + self.output_bias.view(1, -1, 1)
+        output = output.transpose(1, 2).contiguous()
+
+        if self.out_channels == 1:
+            return output.squeeze(-1)
+
+        return output
+
+
 class TransferFunctionSIRENDeepONet(nn.Module):
     """
     DeepONet variant with a SIREN trunk network.
@@ -2031,6 +2375,187 @@ class TransferFunctionSIRENDeepONet(nn.Module):
             output * self.output_scale
             + self.output_bias.view(1, 1, -1)
         )
+
+        if self.out_channels == 1:
+            return output.squeeze(-1)
+
+        return output
+
+
+class TransferFunctionMambaFusionDeepONet(nn.Module):
+    """
+    DeepONet with Mamba placed at the branch/trunk intersection.
+
+    Standard DeepONet computes:
+
+        output[f] = sum_p branch[p] * trunk[f, p]
+
+    This variant first forms per-frequency fused tokens:
+
+        token[f, p] = branch[p] * trunk[f, p]
+
+    Then a sequence block processes token[f] along the frequency axis before
+    the final scalar head. This keeps Mamba at the branch/trunk intersection
+    without rerunning geometry processing for every frequency.
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 1,
+        hidden_channels: int = 64,
+        basis_dim: int = 128,
+        pooling_bins: int = 8,
+        frequency_bands: int = 8,
+        trunk_hidden_dim: int = 128,
+        out_channels: int = 1,
+        mamba_backend: str = "minimal_mamba2",
+        mamba_depth: int = 1,
+        mamba_expansion: int = 2,
+        mamba_kernel_size: int = 4,
+        mamba_d_state: int = 32,
+        mamba_headdim: int = 32,
+        mamba_chunk_size: int = 64,
+        mamba_use_mem_eff_path: bool = False,
+        dropout: float = 0.0,
+        residual_dot: bool = True,
+    ) -> None:
+        super().__init__()
+
+        if out_channels < 1:
+            raise ValueError("out_channels must be >= 1")
+        if basis_dim < 1:
+            raise ValueError("basis_dim must be >= 1")
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.basis_dim = basis_dim
+        self.residual_dot = residual_dot
+        self.model_name = "transfer_function_mamba_fusion_deeponet"
+
+        self.branch_net = GeometryBranchNet(
+            in_channels=in_channels,
+            hidden_channels=hidden_channels,
+            basis_dim=basis_dim,
+            pooling_bins=pooling_bins,
+            out_channels=out_channels,
+        )
+
+        self.trunk_net = FrequencyTrunkNet(
+            basis_dim=basis_dim,
+            frequency_bands=frequency_bands,
+            hidden_dim=trunk_hidden_dim,
+        )
+
+        def make_mamba_block() -> nn.Module:
+            if mamba_backend == "minimal_mamba2":
+                return MinimalMamba2Block(
+                    d_model=basis_dim,
+                    depth=mamba_depth,
+                    d_state=mamba_d_state,
+                    d_conv=mamba_kernel_size,
+                    expand=mamba_expansion,
+                    headdim=mamba_headdim,
+                    chunk_size=mamba_chunk_size,
+                    dropout=dropout,
+                )
+
+            if mamba_backend == "external_mamba2":
+                return ExternalMamba2Block(
+                    d_model=basis_dim,
+                    depth=mamba_depth,
+                    d_state=mamba_d_state,
+                    d_conv=mamba_kernel_size,
+                    expand=mamba_expansion,
+                    headdim=mamba_headdim,
+                    chunk_size=mamba_chunk_size,
+                    use_mem_eff_path=mamba_use_mem_eff_path,
+                )
+
+            if mamba_backend == "lightweight":
+                return LightweightMambaBlock(
+                    d_model=basis_dim,
+                    depth=mamba_depth,
+                    expansion=mamba_expansion,
+                    kernel_size=mamba_kernel_size,
+                    dropout=dropout,
+                )
+
+            raise ValueError(
+                "mamba_backend must be 'minimal_mamba2', "
+                "'external_mamba2', or 'lightweight'"
+            )
+
+        self.fusion_norm = nn.LayerNorm(basis_dim)
+        self.fusion_mamba = make_mamba_block()
+        self.output_head = nn.Sequential(
+            nn.LayerNorm(basis_dim),
+            nn.Linear(basis_dim, basis_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(basis_dim, 1),
+        )
+        self.output_bias = nn.Parameter(torch.zeros(out_channels))
+        self.output_scale = basis_dim ** -0.5
+
+    def forward(
+        self,
+        area: Tensor,
+        kappa: Tensor,
+    ) -> Tensor:
+        if area.ndim != 3:
+            raise ValueError(
+                "area must have shape [B, C, Nx], "
+                f"got {tuple(area.shape)}"
+            )
+        if area.shape[1] != self.in_channels:
+            raise ValueError(
+                f"Expected {self.in_channels} area channels, "
+                f"got {area.shape[1]}"
+            )
+        if kappa.ndim != 3 or kappa.shape[-1] != 1:
+            raise ValueError(
+                "kappa must have shape [B, Nf, 1], "
+                f"got {tuple(kappa.shape)}"
+            )
+        if area.shape[0] != kappa.shape[0]:
+            raise ValueError("area and kappa batch sizes must match")
+
+        batch_size = area.shape[0]
+        branch_coefficients = self.branch_net(area)
+        trunk_basis = self.trunk_net(kappa)
+
+        # [B, C, Nf, P]
+        fused_tokens = (
+            branch_coefficients[:, :, None, :]
+            * trunk_basis[:, None, :, :]
+            * self.output_scale
+        )
+
+        base_output = fused_tokens.sum(dim=-1) if self.residual_dot else None
+
+        # Mamba processes the branch/trunk intersection along frequency.
+        n_frequencies = trunk_basis.shape[1]
+        fused_tokens = fused_tokens.reshape(
+            batch_size * self.out_channels,
+            n_frequencies,
+            self.basis_dim,
+        )
+        fused_tokens = self.fusion_norm(fused_tokens)
+        fused_tokens = self.fusion_mamba(fused_tokens)
+        correction = self.output_head(fused_tokens).squeeze(-1)
+        correction = correction.reshape(
+            batch_size,
+            self.out_channels,
+            n_frequencies,
+        )
+
+        if base_output is not None:
+            output = base_output + correction
+        else:
+            output = correction
+
+        output = output + self.output_bias.view(1, -1, 1)
+        output = output.transpose(1, 2).contiguous()
 
         if self.out_channels == 1:
             return output.squeeze(-1)
