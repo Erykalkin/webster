@@ -207,7 +207,11 @@ def load_history_from_checkpoint(
         return None
 
     try:
-        checkpoint = torch.load(checkpoint_path, map_location=map_location)
+        checkpoint = torch.load(
+            checkpoint_path,
+            map_location=map_location,
+            weights_only=False,
+        )
     except Exception as exc:
         print(f"failed to load history from {checkpoint_path}: {exc}")
         return None
@@ -227,8 +231,9 @@ def get_or_load_history(
     *,
     checkpoint_dir: str | Path = "checkpoints",
     map_location: str | torch.device = "cpu",
+    prefer_checkpoint: bool = False,
 ) -> Any | None:
-    history = namespace.get(history_variable_name)
+    history = None if prefer_checkpoint else namespace.get(history_variable_name)
     if history is not None:
         return history
 
@@ -253,10 +258,11 @@ def get_or_load_model(
     checkpoint_dir: str | Path = "checkpoints",
     strict: bool = True,
     verbose: bool = True,
+    prefer_checkpoint: bool = False,
 ) -> tuple[nn.Module | None, Any | None]:
-    existing_model = namespace.get(variable_name)
+    existing_model = None if prefer_checkpoint else namespace.get(variable_name)
     existing_history = (
-        namespace.get(history_variable_name)
+        None if prefer_checkpoint else namespace.get(history_variable_name)
         if history_variable_name is not None
         else None
     )
@@ -277,7 +283,11 @@ def get_or_load_model(
 
     try:
         model = factory().to(device)
-        checkpoint = torch.load(checkpoint_path, map_location=device)
+        checkpoint = torch.load(
+            checkpoint_path,
+            map_location=device,
+            weights_only=False,
+        )
         load_model_state(model, checkpoint_state_dict(checkpoint), strict=strict)
         model.eval()
 
@@ -1435,6 +1445,7 @@ def load_models_from_specs(
     device: str | torch.device,
     checkpoint_dir: str | Path = "checkpoints",
     verbose: bool = True,
+    prefer_checkpoint: bool = False,
 ) -> list[tuple[str, nn.Module | None, Any | None, BatchToXY]]:
     loaded = []
     for spec in enabled_model_specs(model_specs, verbose=verbose):
@@ -1448,6 +1459,7 @@ def load_models_from_specs(
             checkpoint_dir=checkpoint_dir,
             device=device,
             verbose=verbose,
+            prefer_checkpoint=prefer_checkpoint,
         )
         loaded.append((label, model, history, spec["batch_to_xy"]))
     return loaded
@@ -1489,6 +1501,7 @@ def compare_forward_models(
         model_specs,
         device=device,
         checkpoint_dir=checkpoint_dir,
+        prefer_checkpoint=True,
     )
 
     _, target = target_batch_to_xy(batch, device)
@@ -1638,6 +1651,7 @@ def compare_training_histories(
             str(spec["history_name"]),
             str(spec["checkpoint_name"]),
             checkpoint_dir=checkpoint_dir,
+            prefer_checkpoint=True,
         )
         history_specs.append((str(spec["label"]), history))
 
@@ -1757,6 +1771,7 @@ def compare_training_metrics(
             str(spec["history_name"]),
             str(spec["checkpoint_name"]),
             checkpoint_dir=checkpoint_dir,
+            prefer_checkpoint=True,
         )
         history_specs.append((str(spec["label"]), history))
 
