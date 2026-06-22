@@ -1,8 +1,4 @@
-# Generated from forward.ipynb code cells.
-# Edit forward.ipynb first, then regenerate this file if needed.
-
-
-# %% Cell 1
+# %% Cell 2
 from functools import partial
 from pathlib import Path
 import importlib
@@ -54,7 +50,7 @@ from models.deep import (
     webster_deeponet_batch_to_xy,
 )
 
-# %% Cell 2
+# %% Cell 3
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 batch_size = 32
@@ -127,7 +123,7 @@ val_config = StreamingGeometryDatasetConfig(
 
 print("device:", device)
 
-# %% Cell 3
+# %% Cell 4
 train_loader = make_streaming_dataloader(
     train_config,
     range_library,
@@ -142,7 +138,7 @@ val_loader = make_streaming_dataloader(
     num_workers=0,
 )
 
-# %% Cell 4
+# %% Cell 5
 mlp_batch_to_xy = partial(
     webster_mlp_batch_to_xy,
     n_points=n_profile_points,
@@ -164,7 +160,7 @@ deeponet_batch_to_xy = partial(
     frequency_max_hz=solver_config.f_max_hz,
 )
 
-# %% Cell 5
+# %% Cell 6
 # Validation metrics are often the slowest part of training.
 # Use "fast" for training, "spectral" for peak/shape monitoring, "full" for diagnostics.
 validation_metric_preset = "full"  # "fast", "spectral", "full", or "none"
@@ -225,8 +221,7 @@ print("loss:", criterion)
 print("validation metric preset:", validation_metric_preset)
 print("validation metrics:", validation_metrics)
 
-
-# %% Cell 6
+# %% Cell 7
 validation_preview_batch = lambda: utils.validation_preview_batch(val_loader)
 predict_on_batch = lambda model, batch_to_xy, batch: utils.predict_on_batch(
     model,
@@ -267,9 +262,7 @@ def cleanup_training_memory(*, keep_model_names=()):
         except RuntimeError:
             pass
 
-
-
-# %% Cell 7
+# %% Cell 9
 cleanup_training_memory()
 
 print("=== Training MLP ===")
@@ -323,11 +316,7 @@ mlp_history = utils.fit(
 
 utils.plot_history(mlp_history)
 
-
-
-
-
-# %% Cell 8
+# %% Cell 11
 utils.plot_single_model_preview(
     mlp,
     mlp_batch_to_xy,
@@ -337,7 +326,7 @@ utils.plot_single_model_preview(
     sample_idx=preview_sample_idx,
 )
 
-# %% Cell 9
+# %% Cell 13
 cleanup_training_memory()
 
 print("=== Training MLP MSE baseline ===")
@@ -391,7 +380,7 @@ mlp_mse_history = utils.fit(
 
 utils.plot_history(mlp_mse_history)
 
-# %% Cell 10
+# %% Cell 15
 utils.plot_single_model_preview(
     mlp_mse,
     mlp_batch_to_xy,
@@ -401,7 +390,7 @@ utils.plot_single_model_preview(
     sample_idx=preview_sample_idx,
 )
 
-# %% Cell 11
+# %% Cell 17
 cleanup_training_memory()
 
 print("=== Training FNO ===")
@@ -454,11 +443,7 @@ fno_history = utils.fit(
 
 utils.plot_history(fno_history)
 
-
-
-
-
-# %% Cell 12
+# %% Cell 19
 utils.plot_single_model_preview(
     fno,
     fno_batch_to_xy,
@@ -468,7 +453,7 @@ utils.plot_single_model_preview(
     sample_idx=preview_sample_idx,
 )
 
-# %% Cell 13
+# %% Cell 21
 cleanup_training_memory()
 
 print("=== Training DeepONet ===")
@@ -522,7 +507,7 @@ deeponet_history = utils.fit(
 
 utils.plot_history(deeponet_history)
 
-# %% Cell 14
+# %% Cell 23
 utils.plot_single_model_preview(
     deeponet,
     deeponet_batch_to_xy,
@@ -532,7 +517,7 @@ utils.plot_single_model_preview(
     sample_idx=10,
 )
 
-# %% Cell 15
+# %% Cell 25
 cleanup_training_memory()
 
 print("=== Training FiLM DeepONet ===")
@@ -586,7 +571,7 @@ film_deeponet_history = utils.fit(
 
 utils.plot_history(film_deeponet_history)
 
-# %% Cell 16
+# %% Cell 27
 utils.plot_single_model_preview(
     film_deeponet,
     deeponet_batch_to_xy,
@@ -596,7 +581,7 @@ utils.plot_single_model_preview(
     sample_idx=preview_sample_idx,
 )
 
-# %% Cell 17
+# %% Cell 29
 cleanup_training_memory()
 
 print("=== Training Bilinear Fusion DeepONet ===")
@@ -652,7 +637,7 @@ bilinear_fusion_deeponet_history = utils.fit(
 
 utils.plot_history(bilinear_fusion_deeponet_history)
 
-# %% Cell 18
+# %% Cell 31
 utils.plot_single_model_preview(
     bilinear_fusion_deeponet,
     deeponet_batch_to_xy,
@@ -662,7 +647,7 @@ utils.plot_single_model_preview(
     sample_idx=preview_sample_idx,
 )
 
-# %% Cell 19
+# %% Cell 33
 cleanup_training_memory()
 
 print("=== Training Attention Fusion DeepONet ===")
@@ -720,7 +705,7 @@ attention_fusion_deeponet_history = utils.fit(
 
 utils.plot_history(attention_fusion_deeponet_history)
 
-# %% Cell 20
+# %% Cell 35
 utils.plot_single_model_preview(
     attention_fusion_deeponet,
     deeponet_batch_to_xy,
@@ -730,7 +715,7 @@ utils.plot_single_model_preview(
     sample_idx=preview_sample_idx,
 )
 
-# %% Cell 21
+# %% Cell 37
 cleanup_training_memory()
 
 print("=== Training SIREN DeepONet ===")
@@ -786,7 +771,7 @@ siren_deeponet_history = utils.fit(
 
 utils.plot_history(siren_deeponet_history)
 
-# %% Cell 22
+# %% Cell 39
 utils.plot_single_model_preview(
     siren_deeponet,
     deeponet_batch_to_xy,
@@ -796,7 +781,7 @@ utils.plot_single_model_preview(
     sample_idx=preview_sample_idx,
 )
 
-# %% Cell 23
+# %% Cell 41
 cleanup_training_memory()
 
 print("=== Training Mamba Fusion DeepONet ===")
@@ -859,7 +844,7 @@ mamba_fusion_deeponet_history = utils.fit(
 
 utils.plot_history(mamba_fusion_deeponet_history)
 
-# %% Cell 24
+# %% Cell 43
 utils.plot_single_model_preview(
     mamba_fusion_deeponet,
     deeponet_batch_to_xy,
@@ -869,7 +854,7 @@ utils.plot_single_model_preview(
     sample_idx=preview_sample_idx,
 )
 
-# %% Cell 25
+# %% Cell 45
 cleanup_training_memory()
 
 print("=== Training Mamba SIREN Dynamic Deformable DeepONet ===")
@@ -953,7 +938,7 @@ mamba_siren_dynamic_deformable_deeponet_history = utils.fit(
 
 utils.plot_history(mamba_siren_dynamic_deformable_deeponet_history)
 
-# %% Cell 26
+# %% Cell 47
 utils.plot_single_model_preview(
     mamba_siren_dynamic_deformable_deeponet,
     deeponet_batch_to_xy,
@@ -963,7 +948,7 @@ utils.plot_single_model_preview(
     sample_idx=preview_sample_idx,
 )
 
-# %% Cell 27
+# %% Cell 49
 cleanup_training_memory()
 
 print("=== Training Mamba Operator ===")
@@ -1048,7 +1033,7 @@ mamba_operator_history = utils.fit(
 
 utils.plot_history(mamba_operator_history)
 
-# %% Cell 28
+# %% Cell 51
 utils.plot_single_model_preview(
     mamba_operator,
     deeponet_batch_to_xy,
@@ -1058,7 +1043,7 @@ utils.plot_single_model_preview(
     sample_idx=preview_sample_idx,
 )
 
-# %% Cell 29
+# %% Cell 53
 cleanup_training_memory()
 
 print("=== Training Dynamic DeepONet ===")
@@ -1115,7 +1100,7 @@ dynamic_deeponet_history = utils.fit(
 
 utils.plot_history(dynamic_deeponet_history)
 
-# %% Cell 30
+# %% Cell 54
 # Plot selected validation metrics from a saved checkpoint
 
 metrics_checkpoint_name = "dynamic_deeponet_new_db"
@@ -1146,7 +1131,7 @@ utils.plot_selected_metrics(
     normalize=metrics_normalize,
 )
 
-# %% Cell 31
+# %% Cell 56
 utils.plot_single_model_preview(
     dynamic_deeponet,
     deeponet_batch_to_xy,
@@ -1164,7 +1149,7 @@ utils.plot_single_model_preview(
     sample_idx=3,
 )
 
-# %% Cell 32
+# %% Cell 58
 cleanup_training_memory()
 
 print("=== Training Deformable DeepONet ===")
@@ -1220,9 +1205,7 @@ deformable_deeponet_history = utils.fit(
 
 utils.plot_history(deformable_deeponet_history)
 
-
-
-# %% Cell 33
+# %% Cell 60
 utils.plot_single_model_preview(
     deformable_deeponet,
     deeponet_batch_to_xy,
@@ -1232,7 +1215,7 @@ utils.plot_single_model_preview(
     sample_idx=preview_sample_idx,
 )
 
-# %% Cell 34
+# %% Cell 61
 run_finetune = False
 run_hole_finetune = False
 run_unexpected_geometry_check = False
@@ -1249,7 +1232,7 @@ print("optional diagnostics enabled:", {
     "frequency_grid": run_frequency_grid_check,
 })
 
-# %% Cell 35
+# %% Cell 63
 if globals().get("run_finetune", False):
     cleanup_training_memory()
 
@@ -1745,8 +1728,8 @@ if globals().get("run_finetune", False):
 else:
     print("Fine-tuning skipped")
 
-# %% Cell 36
-run_hole_finetune = True
+# %% Cell 65
+run_hole_finetune = False
 if globals().get("run_hole_finetune", False):
     cleanup_training_memory()
 
@@ -1892,7 +1875,7 @@ if globals().get("run_hole_finetune", False):
 else:
     print("Hole fine-tuning skipped")
 
-# %% Cell 37
+# %% Cell 67
 # Set any checkpoint name to None to remove this model from comparison.
 
 mlp_mse_checkpoint_name = None
@@ -1910,7 +1893,7 @@ deformable_deeponet_checkpoint_name = None
 mamba_operator_checkpoint_name = None
 
 
-# mlp_mse_checkpoint_name = "mlp_mse_db"
+mlp_mse_checkpoint_name = "mlp_mse_db"
 mlp_checkpoint_name = "mlp_db"
 fno_checkpoint_name = "fno_db"
 deeponet_checkpoint_name = "deeponet_db"
@@ -2238,7 +2221,7 @@ comparison_result = utils.compare_forward_models(
     image_title=comparison_image_title,
     output_dir="article/images",
     style=True,
-    save=False,
+    save=True,
     show=True,
     hide_titles=False,
     overwrite=True,
@@ -2247,7 +2230,7 @@ comparison_result = utils.compare_forward_models(
 predictions = comparison_result["predictions"]
 target = comparison_result["target"]
 
-# %% Cell 38
+# %% Cell 68
 history_comparison = utils.compare_training_histories(
     globals(),
     model_specs,
@@ -2262,7 +2245,7 @@ history_comparison = utils.compare_training_histories(
     curves=("val", "train"),
 )
 
-# %% Cell 39
+# %% Cell 69
 top_metric_names = [
     "mae",
     "dominant_peak_level_mae_db",
@@ -2285,7 +2268,7 @@ metric_comparison = utils.compare_training_metrics(
     best_mode="min",
 )
 
-# %% Cell 40
+# %% Cell 71
 if globals().get("run_unexpected_geometry_check", False):
     mlp_mse_checkpoint_name = globals().get("mlp_mse_checkpoint_name", "mlp_mse_db")
     # Cell 12: unexpected geometry check
@@ -2461,7 +2444,7 @@ if globals().get("run_unexpected_geometry_check", False):
 else:
     print("Unexpected geometry check skipped")
 
-# %% Cell 41
+# %% Cell 73
 if globals().get("run_scaling_check", False):
     import numpy as np
     import torch
@@ -2644,7 +2627,7 @@ if globals().get("run_scaling_check", False):
 else:
     print("Scaling check skipped")
 
-# %% Cell 42
+# %% Cell 75
 if globals().get("run_geometry_sensitivity_check", False):
     import torch
 
@@ -2698,7 +2681,7 @@ if globals().get("run_geometry_sensitivity_check", False):
 else:
     print("Geometry sensitivity check skipped")
 
-# %% Cell 43
+# %% Cell 76
 if globals().get("run_frequency_grid_check", False):
     import numpy as np
     import matplotlib.pyplot as plt
@@ -2859,3 +2842,4 @@ if globals().get("run_frequency_grid_check", False):
     plt.show()
 else:
     print("Frequency grid check skipped")
+
