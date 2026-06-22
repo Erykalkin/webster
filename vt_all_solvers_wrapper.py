@@ -811,6 +811,8 @@ def plot_geometry_approximation(
     equal_aspect: bool = False,
     linewidth_original: float = 2.0,
     linewidth_approx: float = 1.5,
+    color_original: str = "black",
+    color_approx: str = "C1",
 ):
     x_m, area_m2 = geometry_to_arrays(geometry)
 
@@ -818,7 +820,7 @@ def plot_geometry_approximation(
         _, ax = plt.subplots(figsize=(8, 4))
 
     if mode == "graph":
-        ax.plot(x_m, area_m2, linewidth=linewidth_original, color="black", label="original")
+        ax.plot(x_m, area_m2, linewidth=linewidth_original, color=color_original, label="original")
 
         if approx == "cylinders":
             sections = approximate_with_cylinders(geometry, section_count)
@@ -827,7 +829,7 @@ def plot_geometry_approximation(
             for sec in sections:
                 xs.extend([sec["left_x_m"], sec["right_x_m"]])
                 ys.extend([sec["area_m2"], sec["area_m2"]])
-            ax.plot(xs, ys, linewidth=linewidth_approx, label=f"cylinders ({section_count})")
+            ax.plot(xs, ys, linewidth=linewidth_approx, color=color_approx, label=f"cylinders ({section_count})")
         elif approx == "cones":
             sections = approximate_with_cones(geometry, section_count)
             xs = [sections[0]["left_x_m"]]
@@ -835,7 +837,7 @@ def plot_geometry_approximation(
             for sec in sections:
                 xs.append(sec["right_x_m"])
                 ys.append(sec["area_out_m2"])
-            ax.plot(xs, ys, linewidth=linewidth_approx, label=f"cones ({section_count})")
+            ax.plot(xs, ys, linewidth=linewidth_approx, color=color_approx, label=f"cones ({section_count})")
         else:
             raise ValueError("approx must be 'cylinders' or 'cones'")
 
@@ -850,9 +852,9 @@ def plot_geometry_approximation(
         radii_m = [math.sqrt(area / math.pi) for area in area_m2]
         upper = radii_m
         lower = [-r for r in radii_m]
-        ax.plot(x_m, upper, color="black", linewidth=linewidth_original, label="original")
-        ax.plot(x_m, lower, color="black", linewidth=linewidth_original)
-        approx_color = "C1"
+        ax.plot(x_m, upper, color=color_original, linewidth=linewidth_original, label="original")
+        ax.plot(x_m, lower, color=color_original, linewidth=linewidth_original)
+        approx_color = color_approx
 
         if approx == "cylinders":
             sections = approximate_with_cylinders(geometry, section_count)
