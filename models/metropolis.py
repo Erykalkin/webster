@@ -18,6 +18,7 @@ LossFn = Callable[[Tensor, Tensor], Tensor]
 class MetropolisResult:
     samples: Tensor
     losses: Tensor
+    trace_losses: Tensor
     accepted_fraction: float
     best_parameters: Tensor
     best_area: Tensor
@@ -173,6 +174,7 @@ def metropolis_inverse(
 
         stored_samples: list[Tensor] = []
         stored_losses: list[Tensor] = []
+        trace_losses: list[Tensor] = []
 
         accepted = 0
 
@@ -227,6 +229,10 @@ def metropolis_inverse(
                 best_area = current_area.clone()
                 best_prediction = current_prediction.clone()
 
+            trace_losses.append(
+                current_loss.detach().cpu().clone()
+            )
+
             if step >= burn_in:
                 if (step - burn_in) % thinning == 0:
                     stored_samples.append(
@@ -250,6 +256,9 @@ def metropolis_inverse(
         ),
         losses=torch.stack(
             stored_losses,
+        ),
+        trace_losses=torch.stack(
+            trace_losses,
         ),
         accepted_fraction=accepted / n_steps,
         best_parameters=best_parameters,
