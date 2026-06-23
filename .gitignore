@@ -30,7 +30,7 @@ article/*.toc
 article/*.synctex.gz
 article/*.bbl
 article/*.blg
-article/*.pdf
+# article/*.pdf
 article/*.run.xml
 article/*.bcf
 
