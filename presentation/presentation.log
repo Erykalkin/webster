@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.27 (MiKTeX 25.2 NEXT) (preloaded format=pdflatex 2026.6.19)  25 JUN 2026 10:10
+This is pdfTeX, Version 3.141592653-2.6-1.40.27 (MiKTeX 25.2 NEXT) (preloaded format=pdflatex 2026.6.19)  25 JUN 2026 11:20
 entering extended mode
  restricted \write18 enabled.
  file:line:error style messages enabled.
@@ -1079,28 +1079,90 @@ Package pdftex.def Info: images/deeponet.png  used on input line 259.
 [12
 
  <./images/deeponet.png (PNG copy)>]
+<images/сравнение_скорости_солвера_и_нейросетей_от_размера_входа.png, id=127, 2369.85374pt x 1434.35875pt>
+File: images/сравнение_скорости_солвера_и_нейросетей_от_размера_входа.png Graphic file (type png)
+<use images/сравнение_скорости_солвера_и_нейросетей_от_размера_входа.png>
+Package pdftex.def Info: images/сравнение_скорости_солвера_и_нейросетей_от_размера_входа.png  used on input line 290.
+(pdftex.def)             Requested size: 202.10388pt x 122.32378pt.
+<images/сравнение_скорости_солвера_и_нейросетей_от_размера_выхода.png, id=128, 2369.85374pt x 1434.35875pt>
+File: images/сравнение_скорости_солвера_и_нейросетей_от_размера_выхода.png Graphic file (type png)
+<use images/сравнение_скорости_солвера_и_нейросетей_от_размера_выхода.png>
+Package pdftex.def Info: images/сравнение_скорости_солвера_и_нейросетей_от_размера_выхода.png  used on input line 290.
+(pdftex.def)             Requested size: 202.10388pt x 122.32378pt.
+
 
 [13
 
-]
-Overfull \vbox (8.14221pt too high) detected at line 318
- []
-
+ <./images/сравнение_скорости_солвера_и_нейросетей_от_размера_входа.png> <./images/сравнение_скорости_солвера_и_нейросетей_от_размера_выхода.png>]
+<images/preds.png, id=137, 1139.00531pt x 737.00343pt>
+File: images/preds.png Graphic file (type png)
+<use images/preds.png>
+Package pdftex.def Info: images/preds.png  used on input line 301.
+(pdftex.def)             Requested size: 302.4954pt x 195.73232pt.
 
 
 [14
 
-]
+ <./images/preds.png>]
 
 [15
 
 ]
+File: images/H.png Graphic file (type png)
+<use images/H.png>
+Package pdftex.def Info: images/H.png  used on input line 350.
+(pdftex.def)             Requested size: 159.85081pt x 97.85881pt.
+File: images/Труба.png Graphic file (type png)
+<use images/Труба.png>
+Package pdftex.def Info: images/Труба.png  used on input line 350.
+(pdftex.def)             Requested size: 153.20201pt x 68.78458pt.
+
 
 [16
 
 ]
+<images/обратная_задача_сравнение_методов.png, id=154, 1282.0698pt x 344.2461pt>
+File: images/обратная_задача_сравнение_методов.png Graphic file (type png)
+<use images/обратная_задача_сравнение_методов.png>
+Package pdftex.def Info: images/обратная_задача_сравнение_методов.png  used on input line 369.
+(pdftex.def)             Requested size: 417.82195pt x 112.18855pt.
+
 
 [17
+
+ <./images/обратная_задача_сравнение_методов.png>]
+<images/обратная_задача_карта_входа.png, id=161, 572.6193pt x 344.7279pt>
+File: images/обратная_задача_карта_входа.png Graphic file (type png)
+<use images/обратная_задача_карта_входа.png>
+Package pdftex.def Info: images/обратная_задача_карта_входа.png  used on input line 380.
+(pdftex.def)             Requested size: 333.27277pt x 200.63664pt.
+
+
+[18
+
+ <./images/обратная_задача_карта_входа.png>]
+<images/обратная_задача_карты_к_трубам.png, id=168, 2529.45pt x 1447.4075pt>
+File: images/обратная_задача_карты_к_трубам.png Graphic file (type png)
+<use images/обратная_задача_карты_к_трубам.png>
+Package pdftex.def Info: images/обратная_задача_карты_к_трубам.png  used on input line 391.
+(pdftex.def)             Requested size: 350.60832pt x 200.62587pt.
+
+
+[19
+
+ <./images/обратная_задача_карты_к_трубам.png>]
+<images/обратная_задача_unet_четыре_геометрии.png, id=175, 993.7125pt x 575.751pt>
+File: images/обратная_задача_unet_четыре_геометрии.png Graphic file (type png)
+<use images/обратная_задача_unet_четыре_геометрии.png>
+Package pdftex.def Info: images/обратная_задача_unet_четыре_геометрии.png  used on input line 404.
+(pdftex.def)             Requested size: 295.59901pt x 171.26828pt.
+
+
+[20
+
+ <./images/обратная_задача_unet_четыре_геометрии.png>]
+
+[21
 
 ]
 \tf@nav=\write6
@@ -1121,17 +1183,17 @@ Package rerunfilecheck Info: File `presentation.out' has not changed.
 (rerunfilecheck)             Checksum: D41D8CD98F00B204E9800998ECF8427E;0.
  ) 
 Here is how much of TeX's memory you used:
- 24131 strings out of 473523
- 475968 string characters out of 5706402
- 829875 words of memory out of 5000000
- 46812 multiletter control sequences out of 15000+600000
- 580761 words of font info for 86 fonts, out of 8000000 for 9000
+ 24182 strings out of 473523
+ 479582 string characters out of 5706402
+ 826875 words of memory out of 5000000
+ 46853 multiletter control sequences out of 15000+600000
+ 582353 words of font info for 88 fonts, out of 8000000 for 9000
  1141 hyphenation exceptions out of 8191
- 128i,13n,123p,448b,641s stack positions out of 10000i,1000n,20000p,200000b,200000s
-<C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmex10.pfb><C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmmi10.pfb><C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmmi7.pfb><C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmss10.pfb><C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmss17.pfb><C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmss8.pfb><C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmssi10.pfb><C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmssi8.pfb><C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmsy10.pfb><C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmsy7.pfb><C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/cm-super/sfrm0700.pfb><C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/cm-super/sfss0500.pfb><C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/cm-super/sfss0700.pfb><C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/cm-super/sfss1000.pfb><C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/cm-super/sfss1200.pfb><C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/cm-super/sfss1440.pfb><C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/cm-super/sfss2488.pfb><C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/cm-super/sfsx0700.pfb><C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/cm-super/sfsx1000.pfb>
-Output written on presentation.pdf (17 pages, 1509592 bytes).
+ 128i,11n,123p,448b,635s stack positions out of 10000i,1000n,20000p,200000b,200000s
+<C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmex10.pfb><C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmmi10.pfb><C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmmi7.pfb><C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmss10.pfb><C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmss17.pfb><C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmssi10.pfb><C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmssi8.pfb><C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmsy10.pfb><C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/cm-super/sfrm0700.pfb><C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/cm-super/sfss0500.pfb><C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/cm-super/sfss0700.pfb><C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/cm-super/sfss1000.pfb><C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/cm-super/sfss1440.pfb><C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/cm-super/sfss2488.pfb><C:/Users/George.LAPTOP-TLP259VH/AppData/Local/Programs/MiKTeX/fonts/type1/public/cm-super/sfsx1000.pfb>
+Output written on presentation.pdf (21 pages, 4352411 bytes).
 PDF statistics:
- 258 PDF objects out of 1000 (max. 8388607)
- 35 named destinations out of 1000 (max. 500000)
- 193 words of extra memory for PDF output out of 10000 (max. 10000000)
+ 262 PDF objects out of 1000 (max. 8388607)
+ 43 named destinations out of 1000 (max. 500000)
+ 186 words of extra memory for PDF output out of 10000 (max. 10000000)
 

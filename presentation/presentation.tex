@@ -259,118 +259,155 @@ L_{total}=w_{dB}L_{dB}+w_{mag}L_{mag}+w_{deriv}L_{deriv}+w_{peak}L_{peak}+w_{lev
 \end{frame}
 
 % 9
-\begin{frame}{Дополнительное обучение и скорость расчета}
+\begin{frame}{Результаты}
+\textbf{Выводы}
+\begin{itemize}
+    \item Комбинированный подход достаточно хорошо предсказывает передаточную функцию и лучше других моделей воспроизводит форму спектрального отклика.
+    \item После обучения нейросети дают существенно более быстрый расчет по сравнению с классическими численными решателями.
+\end{itemize}
+
+\vspace{0.2em}
+
 \begin{columns}[T]
-\column{0.54\textwidth}
-\textbf{70 эпох: Mamba-конфигурации}
-\begin{table}
-\centering
-\scriptsize
-\begin{tabular}{lcc}
-\toprule
-Модель & MAE, дБ & Производная \\
-\midrule
-Mamba Operator & 1.7041 & 0.4615 \\
-Mamba Fusion DeepONet & 1.0016 & 0.3311 \\
-\textbf{Mamba SIREN Dynamic Deformable} & \textbf{0.9115} & \textbf{0.3140} \\
-\bottomrule
-\end{tabular}
-\end{table}
+\column{0.50\textwidth}
+\begin{center}
+    \includegraphics[
+        width=\linewidth,
+        height=0.50\textheight,
+        keepaspectratio
+    ]{images/сравнение_скорости_солвера_и_нейросетей_от_размера_входа.png}
+\end{center}
 
-\textbf{Интерпретация:} усложненная гибридная архитектура оказалась наиболее эффективной среди Mamba-моделей в отдельном 70-эпоховом сравнении.
-
-\column{0.42\textwidth}
-\figplaceholder{0.27\textheight}{Рис. 2.7--2.8: сходимость при 70 эпохах}
-\figplaceholder{0.27\textheight}{Рис. 2.9: сравнение скорости нейросетей и решателей}
+\column{0.50\textwidth}
+\begin{center}
+    \includegraphics[
+        width=\linewidth,
+        height=0.50\textheight,
+        keepaspectratio
+    ]{images/сравнение_скорости_солвера_и_нейросетей_от_размера_выхода.png}
+\end{center}
 \end{columns}
 \end{frame}
 
 % 10
-\begin{frame}{Обратная задача: постановка и оптимизационные методы}
-\textbf{Цель:} восстановить профиль $A(x)$ по заданной амплитудной характеристике $\Hdb(f)$.
-
-\vspace{0.5em}
-\begin{columns}[T]
-\column{0.54\textwidth}
-\textbf{Использованные подходы}
-\begin{itemize}
-    \item градиентная оптимизация через дифференцируемый суррогат;
-    \item стохастический поиск по алгоритму Метрополиса;
-    \item нейросетевое восстановление с помощью U-Net.
-\end{itemize}
-
-\vspace{0.3em}
-\textbf{Параметризация оптимизации}
-\begin{itemize}
-    \item 10 управляющих точек профиля;
-    \item сигмоидальные ограничения площади;
-    \item регуляризация гладкости и кривизны.
-\end{itemize}
-
-\column{0.42\textwidth}
-\figplaceholder{0.42\textheight}{Рис. 3.1: сравнение градиентного метода и Метрополиса}
-\end{columns}
-
-\vspace{0.3em}
-\begin{block}{Наблюдение}
-Один пример не доказывает превосходство метода, но показывает чувствительность обратной задачи к параметризации и качеству прямого суррогата.
-\end{block}
-\end{frame}
-
-% 10
-\begin{frame}{U-Net для обратной задачи}
-\begin{columns}[T]
-\column{0.55\textwidth}
-\textbf{Входное представление}
-\begin{itemize}
-    \item 2D-карта $[H,f,x]$;
-    \item режим префиксных откликов;
-    \item target: $\log A(x)$.
-\end{itemize}
-
-\vspace{0.4em}
-\textbf{Итоговая проверка на 100 примерах}
-\begin{table}
-\centering
-\scriptsize
-\begin{tabular}{lc}
-\toprule
-Метрика & Значение \\
-\midrule
-$\mathrm{MAE}_{\log A}$ & $0.8509 \pm 0.8877$ \\
-$\mathrm{MAE}_{H}$, дБ & $4.3630 \pm 1.7952$ \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\column{0.41\textwidth}
-\figplaceholder{0.22\textheight}{Рис. 3.2: карта $[H,f,x]$}
-\figplaceholder{0.22\textheight}{Рис. 3.4: примеры восстановления}
-\figplaceholder{0.18\textheight}{Рис. 3.5: худший пример и спектральная проверка}
-\end{columns}
+\begin{frame}{Примеры предсказания передаточной функции}
+\begin{center}
+    \includegraphics[
+        width=0.98\linewidth,
+        height=0.80\textheight,
+        keepaspectratio
+    ]{images/preds.png}
+\end{center}
 \end{frame}
 
 % 11
-\begin{frame}{Ограничения и интерпретация результатов}
-\begin{itemize}
-    \item Основной датасет использует фиксированную длину $L=1$ м; для переменной длины требуется отдельный учет масштабирования частоты.
-    \item Геометрии с локальной камерой исключены из основной серии, так как оказались трудными для текущих архитектур.
-    \item Ошибка уровня пиков остается заметной даже при малой глобальной MAE.
-    \item Обратная задача по модулю спектра плохо обусловлена; различие профилей может быть связано как с неоднозначностью, так и с ограничениями оптимизации и суррогата.
-    \item Режим префиксных откликов U-Net является исследовательским экспериментом с расширенной информацией, а не постановкой только по одной конечной АЧХ.
-\end{itemize}
+\begin{frame}
+\begin{center}
+    \Huge Решение обратной задачи
+\end{center}
 \end{frame}
 
 % 12
+\begin{frame}{Постановка обратной задачи}
+\textbf{Цель:} восстановить профиль $A(x)$ по заданной амплитудной характеристике $H_{dB}(f)$.
+
+\vspace{0.5em}
+
+\begin{columns}[c]
+\column{0.40\textwidth}
+\begin{center}
+    $H(f)$
+
+    \vspace{0.5em}
+    \includegraphics[
+        width=0.95\linewidth,
+        height=0.40\textheight,
+        keepaspectratio
+    ]{images/H.png}
+\end{center}
+
+\column{0.12\textwidth}
+\begin{center}
+    \Huge $\Longrightarrow$
+\end{center}
+
+\column{0.40\textwidth}
+\begin{center}
+    $A(x)$
+
+    \vspace{0.5em}
+    \includegraphics[
+        width=0.88\linewidth,
+        height=0.50\textheight,
+        keepaspectratio
+    ]{images/Труба.png}
+\end{center}
+\end{columns}
+
+\vspace{0.5em}
+
+\textbf{Подходы:} градиентная оптимизация, метод Метрополиса, U-Net.
+\end{frame}
+
+% 13
+\begin{frame}{Градиентная оптимизация и метод Метрополиса}
+\textbf{Постановка методов}
+\begin{itemize}
+    \item в градиентном подходе параметры профиля обновляются по градиенту функции ошибки через дифференцируемый суррогат прямой задачи;
+    \item в методе Метрополиса новые профили предлагаются случайно и принимаются или отклоняются по изменению целевой функции;
+    \item в обоих случаях сравниваются заданная амплитудная характеристика и отклик профиля-кандидата.
+\end{itemize}
+
+\vspace{0.3em}
+\begin{center}
+    \includegraphics[
+        width=0.96\linewidth,
+        height=0.56\textheight,
+        keepaspectratio
+    ]{images/обратная_задача_сравнение_методов.png}
+\end{center}
+\end{frame}
+
+% 10
+\begin{frame}{Нейросетевой подход}
+\begin{center}
+    \includegraphics[
+        width=0.96\linewidth,
+        height=0.82\textheight,
+        keepaspectratio
+    ]{images/обратная_задача_карта_входа.png}
+\end{center}
+\end{frame}
+
+% 11
+\begin{frame}
+\begin{center}
+    \includegraphics[
+        width=0.96\linewidth,
+        height=0.82\textheight,
+        keepaspectratio
+    ]{images/обратная_задача_карты_к_трубам.png}
+\end{center}
+\end{frame}
+
+% 12
+\begin{frame}{Результаты нейросетевого подхода}
+\begin{center}
+    \includegraphics[
+        width=0.96\linewidth,
+        height=0.70\textheight,
+        keepaspectratio
+    ]{images/обратная_задача_unet_четыре_геометрии.png}
+\end{center}
+
+\textbf{Вывод:} такой подход позволяет восстанавливать форму канала с точностью до константы.
+\end{frame}
+
+% 13
 \begin{frame}{Итоги работы}
 \begin{enumerate}
-    \item Реализован и сопоставлен набор численных решателей уравнения Вебстера.
-    \item Сформирован потоковый датасет геометрий и передаточных функций.
-    \item Исследованы MLP, FNO, DeepONet, Mamba Operator и модификации DeepONet.
-    \item Наилучшее качество в основной серии дала Mamba Fusion DeepONet: MAE $1.0495$ дБ.
-    \item В дополнительном 70-эпоховом сравнении лучшей стала Mamba SIREN Dynamic Deformable DeepONet: MAE $0.9115$ дБ.
-    \item Нейросетевые модели обеспечивают существенное ускорение прямого расчета.
-    \item Для обратной задачи показана сильная зависимость результата от параметризации и входного представления.
+    \item Сравнены нейросетевые подходы решения прямой задачи; они показали приемлемую точность и высокую скорость работы.
+    \item Рассмотрены методы решения обратной задачи; нейросетевой подход дает приемлемое качество восстановления.
 \end{enumerate}
 
 \vspace{0.5em}
